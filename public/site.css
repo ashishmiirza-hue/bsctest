@@ -98,3 +98,16 @@ button.stop { background: transparent; color: var(--red); border: 1.5px solid va
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
 .state { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: #2a2e52; color: #d6d9ea; }
 .state.on { background: #134a3b; color: #7fe0bf; }
+
+/* spending-limit picker */
+.plan.limit { grid-template-columns: 1fr auto; }
+.custom { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 2px 0; color: var(--soft); font-size: 14px; }
+.custom .field { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1.5px solid var(--line); border-radius: 12px; padding: 6px 12px; }
+.custom .field:focus-within { border-color: var(--cobalt); }
+.custom input { width: 120px; border: 0; background: transparent; color: var(--ink); font: 600 16px var(--body); text-align: right; -webkit-appearance: none; appearance: none; }
+.custom input:focus { outline: none; }
+.custom .suffix { color: var(--soft); font-weight: 600; }
+.terms dd.ok { color: var(--teal); }
+/* quiet / stop work on both <button> and <a class="btn"> */
+.quiet { background: transparent; color: var(--ink); border: 1.5px solid var(--line); }
+.stop { background: transparent; color: var(--red); border: 1.5px solid var(--red); }

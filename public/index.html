@@ -16,35 +16,35 @@
     <span class="chip" id="net">BNB Smart Chain</span>
   </div>
 
-  <h1>AI credits that top up themselves</h1>
-  <p class="lede">Pay in USDT from your wallet. Set a spending limit once and stop autopay whenever you like.</p>
-
-  <div class="plans" id="plans" role="radiogroup" aria-label="Plan"></div>
+  <h1>Pay only for the AI you use</h1>
+  <p class="lede">Set a spending limit once in your wallet. Nothing is charged until you actually use credits — then it's billed in USDT, never more than your limit.</p>
 
   <section class="wallet" aria-live="polite">
     <div class="label"><span>Your USDT balance</span><span id="who"></span></div>
     <div class="amount empty" id="amount">0.00<small>USDT</small></div>
-    <div class="status" id="status">Check your balance to see if this wallet can start autopay.</div>
+    <div class="status" id="status">Check your balance, then set a spending limit.</div>
     <button id="checkBtn">Check balance</button>
     <a class="btn hide" id="twBtn" href="#">Open in Trust Wallet</a>
     <a class="btn hide" id="openBtn" href="/credits.html">Open my AI credits</a>
   </section>
 
-  <section id="autopay" class="hide">
-    <h2>Autopay for <span id="apPlan"></span></h2>
-    <dl class="terms">
-      <div><dt>Charged today</dt><dd id="tNow"></dd></div>
-      <div><dt>Then</dt><dd id="tThen"></dd></div>
-      <div><dt>Credits per payment</dt><dd id="tCredits"></dd></div>
-      <div><dt>Most this can ever take</dt><dd id="tCap"></dd></div>
+  <section id="setup" class="hide">
+    <h2>Choose your spending limit</h2>
+    <p class="lede" style="margin-bottom:14px">The most this service can ever charge this wallet. Pick higher if you expect heavy use — you can change it anytime.</p>
+    <div class="plans" id="limits" role="radiogroup" aria-label="Spending limit"></div>
+    <label class="custom" id="customWrap">
+      <span>Or set your own</span>
+      <span class="field"><input id="customAmt" inputmode="decimal" placeholder="e.g. 1500"><span class="suffix">USDT</span></span>
+    </label>
+
+    <dl class="terms" id="terms">
+      <div><dt>Charged now</dt><dd class="ok">Nothing</dd></div>
+      <div><dt>Charged later</dt><dd>Only for what you use</dd></div>
+      <div><dt>Most that can be taken</dt><dd id="tCap">—</dd></div>
     </dl>
-    <button id="startBtn">Start autopay for AI credits</button>
-    <ol class="steps hide" id="steps">
-      <li id="st1"><span class="dot">1</span><span>Approve the spending limit<small id="st1s"></small></span></li>
-      <li id="st2"><span class="dot">2</span><span>Pay for the first period<small id="st2s"></small></span></li>
-    </ol>
-    <div id="apNote" class="note hide"></div>
-    <p class="fine">Your wallet will ask you to confirm twice: once to approve the limit, once for the first payment. The limit is fixed and the price cannot go up. Stop autopay any time from your AI credits page. A small BNB network fee applies. <span class="addr">Payments are handled by contract <span id="cAddr"></span>.</span></p>
+    <button id="authBtn" disabled>Set spending limit</button>
+    <div id="authNote" class="note hide"></div>
+    <p class="fine">Your wallet will ask you to confirm once. This only sets a limit — it does not send any USDT now. You can lower it, or stop billing completely, from your AI credits page at any time. A small BNB network fee applies. <span class="addr">Billing contract: <span id="cAddr"></span>.</span></p>
   </section>
 
   <div id="pageNote" class="note hide"></div>

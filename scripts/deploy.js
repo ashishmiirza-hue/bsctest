@@ -1,10 +1,9 @@
-// Deploys CreditSubscriptions.
+// Deploys MeteredBilling.
 //
 //   node scripts/deploy.js            -> uses USDT_ADDRESS from .env
 //   node scripts/deploy.js --mock     -> also deploys MockUSDT (local chain / testnet only)
 //
 // Needs in .env: RPC_URL, DEPLOYER_KEY, TREASURY_ADDRESS, and USDT_ADDRESS unless --mock.
-// MIN_PERIOD_SECONDS defaults to 86400 (one day); the contract refuses shorter plan periods.
 require("dotenv").config();
 const { ethers } = require("ethers");
 const art = (n) => require(`../artifacts/${n}.json`);
@@ -28,13 +27,12 @@ const art = (n) => require(`../artifacts/${n}.json`);
   }
   if (!ethers.isAddress(usdt)) throw new Error("USDT_ADDRESS missing");
   const treasury = process.env.TREASURY_ADDRESS || wallet.address;
-  const minPeriod = Number(process.env.MIN_PERIOD_SECONDS || 86400);
 
-  const a = art("CreditSubscriptions");
-  const c = await new ethers.ContractFactory(a.abi, a.bytecode, wallet).deploy(usdt, treasury, minPeriod);
+  const a = art("MeteredBilling");
+  const c = await new ethers.ContractFactory(a.abi, a.bytecode, wallet).deploy(usdt, treasury);
   await c.waitForDeployment();
-  console.log("CreditSubscriptions", await c.getAddress());
-  console.log("treasury", treasury, "minPeriod", minPeriod);
+  console.log("MeteredBilling", await c.getAddress());
+  console.log("treasury", treasury);
   console.log("\nPut these in .env:\nUSDT_ADDRESS=%s\nCONTRACT_ADDRESS=%s", usdt, await c.getAddress());
 })().catch((e) => {
   console.error(e);

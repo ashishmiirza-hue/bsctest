@@ -1,52 +1,45 @@
 /* global App */
-// AI credits page: balance of credits, autopay status, payments, stop autopay.
+// AI credits page: credits balance, spending limit (used / remaining), charge history, stop/resume.
 (() => {
   const A = App, $ = A.$;
 
   async function show() {
-    const [acct, s, remain, allowance] = await Promise.all([
-      A.api("/api/account/" + A.me), A.sub.subs(A.me), A.sub.remainingCap(A.me), A.usdt.allowance(A.me, A.cfg.contract),
-    ]);
+    const acct = await A.api("/api/account/" + A.me);
     $("who").textContent = A.short(A.me);
     $("who").classList.add("on");
     $("connectBtn").classList.add("hide");
     $("credits").textContent = A.num(acct.credits);
     $("credits").classList.toggle("empty", acct.credits === 0);
 
-    const has = Number(s.period) > 0;
-    const finished = has && !s.active && Number(s.charges) >= Number(s.maxCharges);
-    $("state").textContent = s.active ? "Autopay on" : finished ? "Plan finished" : has ? "Autopay stopped" : "No autopay";
-    $("state").classList.toggle("on", s.active);
-    $("status").textContent = s.active
-      ? `Next top-up on or after ${A.date(Number(s.nextChargeAt))}.`
-      : acct.credits > 0 ? "Autopay is off. Your credits stay available." : "No credits yet. Pick a plan to get started.";
-    $("planBtn").classList.toggle("hide", s.active);
-    $("planBtn").textContent = has ? "Start a new plan" : "Choose a plan";
+    const limit = BigInt(acct.limit), remaining = BigInt(acct.remaining), hasLimit = limit > 0n;
+    $("state").textContent = acct.stopped ? "Billing stopped" : hasLimit ? "Active" : "No limit set";
+    $("state").classList.toggle("on", !acct.stopped && hasLimit);
+    $("status").textContent = acct.stopped
+      ? "Billing is stopped. No charges can be made."
+      : hasLimit ? "You're billed only for the credits you use." : "Set a spending limit to start using credits.";
 
-    $("details").classList.toggle("hide", !has && allowance === 0n);
-    const p = A.cfg.plans.find((x) => x.planId === Number(s.planId));
-    $("dPlan").textContent = has ? `${p?.name || "Plan " + s.planId}, ${A.fmt(s.price)} USDT / ${A.every(Number(s.period))}` : "None";
-    $("dCharges").textContent = has ? `${s.charges} of ${s.maxCharges}` : "0";
-    $("dNext").textContent = s.active ? `${A.fmt(s.price)} USDT, ${A.date(Number(s.nextChargeAt))} or later` : "None";
-    $("dRemain").textContent = `${A.fmt(remain)} USDT`;
-    $("dAllow").textContent = `${A.fmt(allowance)} USDT`;
-    $("stopBtn").disabled = !s.active;
-    $("revokeBtn").disabled = allowance === 0n;
+    $("details").classList.toggle("hide", acct.stopped || !hasLimit);
+    $("stopped").classList.toggle("hide", !acct.stopped);
+    $("setBtn").classList.toggle("hide", acct.stopped || hasLimit);
+    $("dUsed").textContent = `${A.fmt(acct.used)} USDT`;
+    $("dRemain").textContent = `${A.fmt(remaining)} USDT`;
+    $("dBal").textContent = `${A.fmt(acct.balance)} USDT`;
+    $("stopBtn").disabled = false;
 
-    const box = $("pays");
+    const box = $("charges");
     box.textContent = "";
-    $("history").classList.toggle("hide", !acct.payments.length);
-    for (const pay of acct.payments) {
+    $("history").classList.toggle("hide", !acct.charges.length);
+    for (const c of acct.charges) {
       const row = document.createElement("div"); row.className = "pay";
-      const what = document.createElement("span"); what.textContent = pay.kind === "first" ? "First payment" : "Top-up";
-      const plus = document.createElement("span"); plus.className = "plus"; plus.textContent = "+" + A.num(pay.credits);
+      const what = document.createElement("span"); what.textContent = "Usage charge";
+      const amt = document.createElement("span"); amt.className = "plus"; amt.style.color = "var(--ink)"; amt.textContent = `${A.fmt(c.amount)} USDT`;
       const when = document.createElement("span"); when.className = "when";
       if (A.cfg.explorer) {
-        const link = document.createElement("a"); link.href = `${A.cfg.explorer}/tx/${pay.tx_hash}`; link.target = "_blank"; link.rel = "noopener";
-        link.textContent = A.date(pay.paid_at); when.append(link);
-      } else when.textContent = A.date(pay.paid_at);
-      const usd = document.createElement("span"); usd.className = "usd"; usd.textContent = `${A.fmt(pay.amount)} USDT`;
-      row.append(what, plus, when, usd);
+        const link = document.createElement("a"); link.href = `${A.cfg.explorer}/tx/${c.tx_hash}`; link.target = "_blank"; link.rel = "noopener";
+        link.textContent = A.date(c.charged_at); when.append(link);
+      } else when.textContent = A.date(c.charged_at);
+      const blank = document.createElement("span");
+      row.append(what, amt, when, blank);
       box.append(row);
     }
   }
@@ -58,7 +51,7 @@
       const tx = await send();
       btn.textContent = working;
       await tx.wait();
-      await A.confirmOnChain(tx.hash).catch(() => {});
+      await A.api("/api/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ address: A.me }) }).catch(() => {});
       await show();
       A.note("actNote", done, "good");
     } catch (e) {
@@ -71,8 +64,6 @@
   async function connect(prompt) {
     try {
       if (!(await A.connect(prompt))) return;
-      const pending = A.store.get("pendingTx"); // a payment whose confirmation was interrupted
-      if (pending) { await A.confirmOnChain(pending).catch(() => {}); A.store.set("pendingTx", null); }
       await show();
     } catch (e) {
       $("status").textContent = A.errText(e);
@@ -83,7 +74,7 @@
   (async () => {
     await A.loadConfig();
     if (A.cfg.setup) return A.note("pageNote", "This site is still being set up. Check back soon.", "warn");
-    if (new URLSearchParams(location.search).has("started")) {
+    if (new URLSearchParams(location.search).has("set")) {
       $("okNote").classList.remove("hide");
       history.replaceState(null, "", "/credits.html");
     }
@@ -91,13 +82,12 @@
       $("connectBtn").classList.add("hide");
       $("twBtn").classList.remove("hide");
       $("twBtn").href = A.deepLink();
-      $("status").textContent = "Open this page in Trust Wallet's browser to see your credits.";
+      $("status").textContent = "Open this page in Trust Wallet's browser to see your account.";
       return;
     }
     $("connectBtn").onclick = () => connect(true);
-    $("stopBtn").onclick = () => act($("stopBtn"), "Stop autopay", "Stopping…", () => A.sub.cancel(), "Autopay stopped. No more payments will be taken.");
-    $("revokeBtn").onclick = () => act($("revokeBtn"), "Remove approval", "Removing…", () => A.usdt.approve(A.cfg.contract, 0n), "Approval removed. This site can no longer take USDT from your wallet.");
-    await connect(false); // no popup if the wallet is already connected
-    if (!A.me && A.inWalletBrowser()) await connect(true); // wallet browsers answer this themselves
+    $("stopBtn").onclick = () => act($("stopBtn"), "Stop billing", "Stopping…", () => A.bill.stop(), "Billing stopped. No more charges can be made.");
+    $("resumeBtn").onclick = () => act($("resumeBtn"), "Resume billing", "Resuming…", () => A.bill.resume(), "Billing resumed.");
+    await connect(false); // silent: shows the account if the wallet is already connected
   })().catch((e) => A.note("pageNote", "Could not load the page: " + A.errText(e), "bad"));
 })();

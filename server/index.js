@@ -1,6 +1,6 @@
-// Backend: public config, eligibility, on-chain payment verification, credits, admin API.
-// Credits are only ever granted from events emitted by CONTRACT_ADDRESS in a confirmed,
-// successful transaction. Nothing the browser sends is trusted except a tx hash to look up.
+// Backend for metered (pay-as-you-go) USDT billing.
+// Nothing here can move a user's money. Charges happen on chain, signed by the owner wallet in the
+// admin panel; this server only reads the chain, verifies confirmed transactions, and books credits.
 require("dotenv").config();
 const path = require("path");
 const fs = require("fs");
@@ -11,10 +11,7 @@ const { DatabaseSync } = require("node:sqlite");
 
 const env = (k, d) => process.env[k] ?? d;
 const need = (k) => {
-  if (!process.env[k]) {
-    console.error(`Missing ${k} in .env`);
-    process.exit(1);
-  }
+  if (!process.env[k]) { console.error(`Missing ${k} in .env`); process.exit(1); }
   return process.env[k];
 };
 
@@ -22,7 +19,6 @@ const PORT = Number(env("PORT", 3000));
 const RPC_URL = need("RPC_URL");
 const CHAIN_ID = Number(need("CHAIN_ID"));
 const USDT = ethers.getAddress(need("USDT_ADDRESS"));
-// Optional: without it the server starts in setup mode and the contract is deployed from the admin panel.
 const ENV_CONTRACT = process.env.CONTRACT_ADDRESS ? ethers.getAddress(process.env.CONTRACT_ADDRESS) : null;
 let CONTRACT = null;
 const CONFIRMATIONS = Number(env("CONFIRMATIONS", 5));
@@ -32,32 +28,41 @@ const DB_PATH = env("DB_PATH", path.join(__dirname, "..", "data", "app.db"));
 if (ADMIN_PASSWORD.length < 10) console.warn("WARNING: ADMIN_PASSWORD is short; use 10+ characters.");
 
 // ------------------------------------------------------------------ chain
-const SUB_ABI = [
+const BILL_ABI = [
   "function owner() view returns (address)",
   "function token() view returns (address)",
   "function treasury() view returns (address)",
-  "function minPeriod() view returns (uint32)",
-  "function planCount() view returns (uint256)",
-  "function plans(uint256) view returns (uint128 price, uint32 period, uint16 maxCharges, bool active)",
-  "function subs(address) view returns (uint32 planId, uint128 price, uint32 period, uint16 maxCharges, uint16 charges, uint64 nextChargeAt, bool active)",
-  "event PlanCreated(uint256 indexed planId, uint256 price, uint256 period, uint256 maxCharges)",
-  "event PlanStatus(uint256 indexed planId, bool active)",
-  "event Subscribed(address indexed user, uint256 indexed planId, uint256 price, uint256 period, uint256 maxCharges, uint256 nextChargeAt)",
-  "event Charged(address indexed user, uint256 indexed planId, uint256 amount, uint256 chargeNo, uint256 nextChargeAt)",
-  "event Cancelled(address indexed user, address indexed by)",
-  "event Completed(address indexed user)",
+  "function maxPerCharge() view returns (uint256)",
+  "function totalCharged(address) view returns (uint256)",
+  "function stopped(address) view returns (bool)",
+  "function remaining(address) view returns (uint256)",
+  "event Charged(address indexed user, uint256 amount, uint256 totalCharged)",
+  "event Stopped(address indexed user, address indexed by)",
+  "event Resumed(address indexed user)",
 ];
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function decimals() view returns (uint8)",
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 ];
 const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, { staticNetwork: true });
-let sub = null; // set by useContract()
-const subIface = new ethers.Interface(SUB_ABI);
-const usdt = new ethers.Contract(USDT, ERC20_ABI, provider);
+const billIface = new ethers.Interface(BILL_ABI);
 const erc20Iface = new ethers.Interface(ERC20_ABI);
+const usdt = new ethers.Contract(USDT, ERC20_ABI, provider);
+let bill = null;
 let DECIMALS = 18;
+
+async function useContract(address) {
+  const a = ethers.getAddress(address);
+  if ((await provider.getCode(a)) === "0x") throw new Error("No contract at " + a);
+  const c = new ethers.Contract(a, BILL_ABI, provider);
+  let token;
+  try { token = await c.token(); await c.maxPerCharge(); } catch { throw new Error("That address is not a MeteredBilling contract"); }
+  if (ethers.getAddress(token) !== USDT) throw new Error("That contract uses a different token than USDT_ADDRESS");
+  CONTRACT = a;
+  bill = c;
+}
 
 // ------------------------------------------------------------------ db
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -65,90 +70,45 @@ const db = new DatabaseSync(DB_PATH);
 db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS plans (
-    plan_id INTEGER PRIMARY KEY, name TEXT NOT NULL, credits INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '');
-  CREATE TABLE IF NOT EXISTS users (
-    address TEXT PRIMARY KEY, credits INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS payments (
+  CREATE TABLE IF NOT EXISTS accounts (
+    address TEXT PRIMARY KEY, limit_set TEXT NOT NULL DEFAULT '0', total_charged TEXT NOT NULL DEFAULT '0',
+    stopped INTEGER NOT NULL DEFAULT 0, credits INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS charges (
     id INTEGER PRIMARY KEY AUTOINCREMENT, tx_hash TEXT NOT NULL, log_index INTEGER NOT NULL,
-    address TEXT NOT NULL, plan_id INTEGER NOT NULL, amount TEXT NOT NULL, kind TEXT NOT NULL,
-    credits INTEGER NOT NULL, block INTEGER NOT NULL, paid_at INTEGER NOT NULL,
+    address TEXT NOT NULL, amount TEXT NOT NULL, block INTEGER NOT NULL, charged_at INTEGER NOT NULL,
     UNIQUE (tx_hash, log_index));
-  CREATE TABLE IF NOT EXISTS subscriptions (
-    address TEXT PRIMARY KEY, plan_id INTEGER NOT NULL, price TEXT NOT NULL, period INTEGER NOT NULL,
-    max_charges INTEGER NOT NULL, charges INTEGER NOT NULL, next_charge_at INTEGER NOT NULL,
-    status TEXT NOT NULL, updated_at INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS credit_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL, delta INTEGER NOT NULL,
     reason TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('min_balance', '0');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('limits', '["50","200","1000"]');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('min_limit', '10');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('max_limit', '5000');
 `);
 const now = () => Math.floor(Date.now() / 1000);
 const setting = (k) => db.prepare("SELECT value FROM settings WHERE key = ?").get(k)?.value;
+const setSetting = (k, v) => db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(k, v);
 
 function addCredits(address, delta, reason, ref) {
-  db.prepare("INSERT OR IGNORE INTO users (address, credits, created_at) VALUES (?, 0, ?)").run(address, now());
-  db.prepare("UPDATE users SET credits = credits + ? WHERE address = ?").run(delta, address);
-  db.prepare("INSERT INTO credit_ledger (address, delta, reason, ref, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(address, delta, reason, ref, now());
+  db.prepare("INSERT OR IGNORE INTO accounts (address, created_at, updated_at) VALUES (?, ?, ?)").run(address, now(), now());
+  db.prepare("UPDATE accounts SET credits = credits + ? WHERE address = ?").run(delta, address);
+  db.prepare("INSERT INTO credit_ledger (address, delta, reason, ref, created_at) VALUES (?, ?, ?, ?, ?)").run(address, delta, reason, ref, now());
 }
 
-// ------------------------------------------------------------------ chain helpers
-// Point the server at a subscription contract after checking it really is one for our token.
-async function useContract(address) {
-  const a = ethers.getAddress(address);
-  if ((await provider.getCode(a)) === "0x") throw new Error("No contract at " + a);
-  const c = new ethers.Contract(a, SUB_ABI, provider);
-  let token;
-  try { token = await c.token(); await c.planCount(); } catch { throw new Error("That address is not a CreditSubscriptions contract"); }
-  if (ethers.getAddress(token) !== USDT) throw new Error("That contract uses a different token than USDT_ADDRESS");
-  CONTRACT = a;
-  sub = c;
-  planCache = { at: 0, list: [] };
+// Mirror a user's on-chain state (limit = allowance, total charged, stopped) into the db.
+async function syncAccount(address) {
+  const [allowance, charged, stopped] = await Promise.all([
+    usdt.allowance(address, CONTRACT), bill.totalCharged(address), bill.stopped(address),
+  ]);
+  const existing = db.prepare("SELECT created_at FROM accounts WHERE address = ?").get(address);
+  db.prepare(`INSERT INTO accounts (address, limit_set, total_charged, stopped, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(address) DO UPDATE SET limit_set=excluded.limit_set, total_charged=excluded.total_charged,
+        stopped=excluded.stopped, updated_at=excluded.updated_at`)
+    .run(address, allowance.toString(), charged.toString(), stopped ? 1 : 0, existing?.created_at ?? now(), now());
+  return db.prepare("SELECT * FROM accounts WHERE address = ?").get(address);
 }
 
-let planCache = { at: 0, list: [] };
-async function chainPlans(force) {
-  if (!force && Date.now() - planCache.at < 15000) return planCache.list;
-  const n = Number(await sub.planCount());
-  const rows = await Promise.all([...Array(n).keys()].map((i) => sub.plans(i)));
-  const list = rows.map((p, i) => ({
-    planId: i,
-    price: p.price.toString(),
-    period: Number(p.period),
-    maxCharges: Number(p.maxCharges),
-    cap: (p.price * p.maxCharges).toString(),
-    active: p.active,
-  }));
-  planCache = { at: Date.now(), list };
-  return list;
-}
-
-async function mergedPlans(force) {
-  const meta = new Map(db.prepare("SELECT * FROM plans").all().map((r) => [r.plan_id, r]));
-  return (await chainPlans(force)).map((p) => {
-    const m = meta.get(p.planId);
-    return { ...p, name: m?.name ?? "", credits: m?.credits ?? 0, description: m?.description ?? "" };
-  });
-}
-
-// Mirror the on-chain subscription of one address into the database.
-async function syncSub(address) {
-  const s = await sub.subs(address);
-  if (Number(s.period) === 0) return null;
-  const status = s.active ? "active" : Number(s.charges) >= Number(s.maxCharges) ? "completed" : "cancelled";
-  db.prepare(`INSERT INTO subscriptions
-      (address, plan_id, price, period, max_charges, charges, next_charge_at, status, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(address) DO UPDATE SET plan_id=excluded.plan_id, price=excluded.price, period=excluded.period,
-        max_charges=excluded.max_charges, charges=excluded.charges, next_charge_at=excluded.next_charge_at,
-        status=excluded.status, updated_at=excluded.updated_at`)
-    .run(address, Number(s.planId), s.price.toString(), Number(s.period), Number(s.maxCharges),
-      Number(s.charges), Number(s.nextChargeAt), status, now());
-  return db.prepare("SELECT * FROM subscriptions WHERE address = ?").get(address);
-}
-
-// Look a transaction up on chain and apply whatever our contract emitted in it. Idempotent.
+// Look up a transaction and apply any Charged events our contract emitted in it. Idempotent.
 async function processTx(txHash) {
   const receipt = await provider.getTransactionReceipt(txHash);
   if (!receipt) return { status: "pending" };
@@ -158,56 +118,35 @@ async function processTx(txHash) {
   if (confirmations < CONFIRMATIONS) return { status: "confirming", confirmations, required: CONFIRMATIONS };
 
   const ours = receipt.logs.filter((l) => l.address.toLowerCase() === CONTRACT.toLowerCase());
-  if (!ours.length) return { status: "ignored", reason: "No event from the subscription contract in this transaction." };
+  if (!ours.length) return { status: "ignored", reason: "No event from the billing contract in this transaction." };
 
-  // Token movements in the same transaction, used as a second check on every payment event.
   const transfers = receipt.logs
     .filter((l) => l.address.toLowerCase() === USDT.toLowerCase())
     .map((l) => { try { return erc20Iface.parseLog(l); } catch { return null; } })
     .filter((p) => p && p.name === "Transfer");
 
   const block = await provider.getBlock(receipt.blockNumber);
-  const plans = new Map(db.prepare("SELECT * FROM plans").all().map((r) => [r.plan_id, r]));
   const touched = new Set();
-  let credited = 0;
-  let payments = 0;
+  let newCharges = 0;
 
   for (const log of ours) {
     let ev;
-    try { ev = subIface.parseLog(log); } catch { continue; }
-    if (!ev) continue;
-    if (ev.name === "PlanCreated" || ev.name === "PlanStatus") { planCache.at = 0; continue; }
-    if (!ev.args.user) continue;
+    try { ev = billIface.parseLog(log); } catch { continue; }
+    if (!ev || !ev.args.user) continue;
     const user = ethers.getAddress(ev.args.user);
     touched.add(user);
-    if (ev.name !== "Subscribed" && ev.name !== "Charged") continue;
+    if (ev.name !== "Charged") continue;
 
-    const amount = ev.name === "Subscribed" ? ev.args.price : ev.args.amount;
+    const amount = ev.args.amount;
     const paid = transfers.some((t) => ethers.getAddress(t.args.from) === user && t.args.value === amount);
-    if (!paid) continue; // event without the matching token transfer: never credit
+    if (!paid) continue; // a Charged event with no matching USDT transfer: never record
 
-    const planId = Number(ev.args.planId);
-    const credits = plans.get(planId)?.credits ?? 0;
-    db.exec("BEGIN");
-    try {
-      const ins = db.prepare(`INSERT OR IGNORE INTO payments
-          (tx_hash, log_index, address, plan_id, amount, kind, credits, block, paid_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(receipt.hash, log.index, user, planId, amount.toString(),
-          ev.name === "Subscribed" ? "first" : "renewal", credits, receipt.blockNumber, block.timestamp);
-      if (ins.changes) {
-        payments += 1;
-        credited += credits;
-        addCredits(user, credits, ev.name === "Subscribed" ? "subscription" : "renewal", receipt.hash);
-      }
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
+    const ins = db.prepare(`INSERT OR IGNORE INTO charges (tx_hash, log_index, address, amount, block, charged_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(receipt.hash, log.index, user, amount.toString(), receipt.blockNumber, block.timestamp);
+    if (ins.changes) newCharges += 1;
   }
-  for (const u of touched) await syncSub(u);
-  return { status: "confirmed", newPayments: payments, credited, users: [...touched] };
+  for (const u of touched) await syncAccount(u);
+  return { status: "confirmed", newCharges, users: [...touched] };
 }
 
 // ------------------------------------------------------------------ http
@@ -233,63 +172,50 @@ const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
 });
 const addr = (v) => (typeof v === "string" && ethers.isAddress(v) ? ethers.getAddress(v) : null);
 
-// very small fixed-window rate limiter
 const hits = new Map();
 const limit = (name, max, windowMs) => (req, res, next) => {
-  const key = name + ":" + req.ip;
-  const t = Date.now();
-  const h = hits.get(key);
+  const key = name + ":" + req.ip, t = Date.now(), h = hits.get(key);
   if (!h || t - h.start > windowMs) hits.set(key, { start: t, n: 1 });
   else if (++h.n > max) return res.status(429).json({ error: "Too many requests, try again shortly." });
   next();
 };
 setInterval(() => { const t = Date.now(); for (const [k, h] of hits) if (t - h.start > 3600e3) hits.delete(k); }, 600e3).unref();
 
-// Until a contract is configured, only login and the setup endpoints work.
+const limits = () => { try { return JSON.parse(setting("limits")); } catch { return []; } };
+
+// Only login + setup endpoints work until a contract is configured.
 app.use("/api", (req, res, next) => {
-  if (sub || ["/config", "/admin/login", "/admin/overview", "/admin/artifact", "/admin/contract"].includes(req.path)) return next();
+  if (bill || ["/config", "/admin/login", "/admin/overview", "/admin/artifact", "/admin/contract"].includes(req.path)) return next();
   res.status(503).json({ error: "Setup is not finished yet." });
 });
 
 app.get("/api/config", wrap(async (req, res) => {
-  if (!sub) return res.json({ setup: true, chainId: CHAIN_ID, plans: [] });
-  const [treasury, plans] = await Promise.all([sub.treasury(), mergedPlans()]);
+  if (!bill) return res.json({ setup: true, chainId: CHAIN_ID, limits: [] });
+  const [treasury, maxPer] = await Promise.all([bill.treasury(), bill.maxPerCharge()]);
   res.json({
-    chainId: CHAIN_ID,
-    usdt: USDT,
-    contract: CONTRACT,
-    treasury,
-    decimals: DECIMALS,
-    confirmations: CONFIRMATIONS,
-    minBalance: setting("min_balance"),
+    chainId: CHAIN_ID, usdt: USDT, contract: CONTRACT, treasury, decimals: DECIMALS, confirmations: CONFIRMATIONS,
     explorer: env("EXPLORER_URL", CHAIN_ID === 56 ? "https://bscscan.com" : ""),
-    plans: plans.filter((p) => p.active && p.credits > 0),
+    limits: limits(), minLimit: setting("min_limit"), maxLimit: setting("max_limit"),
+    maxPerCharge: maxPer.toString(),
   });
 }));
 
-app.get("/api/eligibility/:address", limit("elig", 60, 60e3), wrap(async (req, res) => {
-  const a = addr(req.params.address);
+// Called by the page after a user approves, so the account appears in the admin panel.
+app.post("/api/activate", limit("act", 60, 60e3), wrap(async (req, res) => {
+  const a = addr(req.body?.address);
   if (!a) return res.status(400).json({ error: "Bad address" });
-  const balance = await usdt.balanceOf(a); // read by the server, not reported by the browser
-  const min = ethers.parseUnits(setting("min_balance") || "0", DECIMALS);
-  const plan = (await mergedPlans()).find((p) => String(p.planId) === String(req.query.planId));
-  const required = plan && BigInt(plan.price) > min ? BigInt(plan.price) : min;
-  res.json({
-    address: a,
-    balance: balance.toString(),
-    minBalance: min.toString(),
-    required: required.toString(),
-    eligible: balance >= required,
-  });
+  res.json({ account: await syncAccount(a) }); // reads the real allowance on chain, never trusts the body
 }));
 
 app.get("/api/account/:address", limit("acct", 120, 60e3), wrap(async (req, res) => {
   const a = addr(req.params.address);
   if (!a) return res.status(400).json({ error: "Bad address" });
-  const user = db.prepare("SELECT credits FROM users WHERE address = ?").get(a);
-  const subscription = await syncSub(a);
-  const payments = db.prepare("SELECT tx_hash, plan_id, amount, kind, credits, paid_at FROM payments WHERE address = ? ORDER BY id DESC LIMIT 50").all(a);
-  res.json({ address: a, credits: user?.credits ?? 0, subscription, payments });
+  const [acct, remaining, balance] = await Promise.all([syncAccount(a), bill.remaining(a), usdt.balanceOf(a)]);
+  const charges = db.prepare("SELECT tx_hash, amount, charged_at FROM charges WHERE address = ? ORDER BY id DESC LIMIT 50").all(a);
+  res.json({
+    address: a, credits: acct.credits, limit: acct.limit_set, used: acct.total_charged,
+    remaining: remaining.toString(), stopped: !!acct.stopped, balance: balance.toString(), charges,
+  });
 }));
 
 app.post("/api/verify", limit("verify", 60, 60e3), wrap(async (req, res) => {
@@ -299,14 +225,13 @@ app.post("/api/verify", limit("verify", 60, 60e3), wrap(async (req, res) => {
 }));
 
 // ------------------------------------------------------------------ admin
-const sign = (payload) => crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
+const sign = (p) => crypto.createHmac("sha256", SESSION_SECRET).update(p).digest("hex");
 const safeEq = (a, b) => {
   const x = crypto.createHash("sha256").update(String(a)).digest();
   const y = crypto.createHash("sha256").update(String(b)).digest();
   return crypto.timingSafeEqual(x, y);
 };
 app.post("/api/admin/login", limit("login", 8, 15 * 60e3), (req, res) => {
-  // spaces/newlines around the password (pasting on a phone adds them) are ignored
   if (!safeEq(String(req.body?.password ?? "").trim(), ADMIN_PASSWORD.trim())) return res.status(401).json({ error: "Wrong password" });
   const exp = String(Date.now() + 8 * 3600e3);
   res.json({ token: `${exp}.${sign(exp)}` });
@@ -317,56 +242,43 @@ const admin = (req, res, next) => {
   next();
 };
 
+app.get("/api/admin/artifact", admin, (req, res) => res.json(require("../artifacts/MeteredBilling.json")));
+
+app.post("/api/admin/contract", admin, wrap(async (req, res) => {
+  if (ENV_CONTRACT) return res.status(409).json({ error: "CONTRACT_ADDRESS is set in the environment; change it there." });
+  if (bill && db.prepare("SELECT 1 FROM charges LIMIT 1").get()) return res.status(409).json({ error: "This site already has charges on its current contract." });
+  const a = addr(req.body?.address);
+  if (!a) return res.status(400).json({ error: "Bad address" });
+  try { await useContract(a); } catch (e) { return res.status(400).json({ error: e.message }); }
+  setSetting("contract", a);
+  res.json({ ok: true, contract: a });
+}));
+
 app.get("/api/admin/overview", admin, wrap(async (req, res) => {
-  if (!sub) return res.json({ setupNeeded: true, chainId: CHAIN_ID, usdt: USDT, decimals: DECIMALS });
-  const [owner, treasury, minPeriod, plans] = await Promise.all([sub.owner(), sub.treasury(), sub.minPeriod(), mergedPlans(true)]);
-  const total = db.prepare("SELECT amount FROM payments").all().reduce((s, r) => s + BigInt(r.amount), 0n);
+  if (!bill) return res.json({ setupNeeded: true, chainId: CHAIN_ID, usdt: USDT, decimals: DECIMALS });
+  const [owner, treasury, maxPer] = await Promise.all([bill.owner(), bill.treasury(), bill.maxPerCharge()]);
+  const total = db.prepare("SELECT amount FROM charges").all().reduce((s, r) => s + BigInt(r.amount), 0n);
   res.json({
-    chainId: CHAIN_ID, contract: CONTRACT, contractInEnv: !!ENV_CONTRACT, usdt: USDT, decimals: DECIMALS, owner, treasury,
-    minPeriod: Number(minPeriod), minBalance: setting("min_balance"), now: now(),
+    chainId: CHAIN_ID, contract: CONTRACT, contractInEnv: !!ENV_CONTRACT, usdt: USDT, decimals: DECIMALS,
+    owner, treasury, maxPerCharge: maxPer.toString(), now: now(),
     explorer: env("EXPLORER_URL", CHAIN_ID === 56 ? "https://bscscan.com" : ""),
-    plans,
+    limits: limits(), minLimit: setting("min_limit"), maxLimit: setting("max_limit"),
     totalReceived: total.toString(),
-    users: db.prepare("SELECT address, credits, created_at FROM users ORDER BY created_at DESC LIMIT 500").all(),
-    subscriptions: db.prepare("SELECT * FROM subscriptions ORDER BY (status = 'active') DESC, next_charge_at ASC LIMIT 500").all(),
-    payments: db.prepare("SELECT * FROM payments ORDER BY id DESC LIMIT 500").all(),
+    accounts: db.prepare("SELECT * FROM accounts ORDER BY updated_at DESC LIMIT 500").all(),
+    charges: db.prepare("SELECT * FROM charges ORDER BY id DESC LIMIT 500").all(),
     ledger: db.prepare("SELECT * FROM credit_ledger ORDER BY id DESC LIMIT 200").all(),
   });
 }));
 
-// Setup: ABI + bytecode for deploying from the admin's own wallet (no key ever reaches the server).
-app.get("/api/admin/artifact", admin, (req, res) => res.json(require("../artifacts/CreditSubscriptions.json")));
-
-// Setup: remember the contract the admin just deployed. Ignored once CONTRACT_ADDRESS is set in the environment.
-app.post("/api/admin/contract", admin, wrap(async (req, res) => {
-  if (ENV_CONTRACT) return res.status(409).json({ error: "CONTRACT_ADDRESS is set in the environment; change it there." });
-  if (sub && db.prepare("SELECT 1 FROM payments LIMIT 1").get()) return res.status(409).json({ error: "This site already has payments on its current contract." });
-  const a = addr(req.body?.address);
-  if (!a) return res.status(400).json({ error: "Bad address" });
-  try { await useContract(a); } catch (e) { return res.status(400).json({ error: e.message }); }
-  db.prepare("INSERT INTO settings (key, value) VALUES ('contract', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(a);
-  res.json({ ok: true, contract: a });
-}));
-
 app.put("/api/admin/settings", admin, wrap(async (req, res) => {
-  const v = String(req.body?.minBalance ?? "").trim();
-  try { if (ethers.parseUnits(v, DECIMALS) < 0n) throw 0; } catch { return res.status(400).json({ error: "Minimum balance must be a number like 25 or 25.5" }); }
-  db.prepare("UPDATE settings SET value = ? WHERE key = 'min_balance'").run(v);
-  res.json({ ok: true });
-}));
-
-// Name + credits for a plan that already exists on chain.
-app.put("/api/admin/plans/:id", admin, wrap(async (req, res) => {
-  const id = Number(req.params.id);
-  const name = String(req.body?.name ?? "").trim().slice(0, 60);
-  const description = String(req.body?.description ?? "").trim().slice(0, 200);
-  const credits = Number(req.body?.credits);
-  const exists = (await chainPlans(true)).some((p) => p.planId === id);
-  if (!exists) return res.status(404).json({ error: "Plan is not on chain yet" });
-  if (!name || !Number.isInteger(credits) || credits < 0 || credits > 1e12) return res.status(400).json({ error: "Name and a whole number of credits are required" });
-  db.prepare(`INSERT INTO plans (plan_id, name, credits, description) VALUES (?, ?, ?, ?)
-      ON CONFLICT(plan_id) DO UPDATE SET name=excluded.name, credits=excluded.credits, description=excluded.description`)
-    .run(id, name, credits, description);
+  const body = req.body || {};
+  const parse = (v) => { try { if (ethers.parseUnits(String(v), DECIMALS) < 0n) throw 0; return String(v); } catch { return null; } };
+  if (body.limits !== undefined) {
+    if (!Array.isArray(body.limits) || body.limits.some((v) => parse(v) === null)) return res.status(400).json({ error: "Spending limits must be a list of USDT amounts." });
+    setSetting("limits", JSON.stringify(body.limits.map(String).slice(0, 8)));
+  }
+  if (body.minLimit !== undefined) { const v = parse(body.minLimit); if (v === null) return res.status(400).json({ error: "Bad minimum limit" }); setSetting("min_limit", v); }
+  if (body.maxLimit !== undefined) { const v = parse(body.maxLimit); if (v === null) return res.status(400).json({ error: "Bad maximum limit" }); setSetting("max_limit", v); }
   res.json({ ok: true });
 }));
 
@@ -375,8 +287,8 @@ app.post("/api/admin/credits/adjust", admin, wrap(async (req, res) => {
   const delta = Number(req.body?.delta);
   const reason = String(req.body?.reason ?? "").trim().slice(0, 120);
   if (!a || !Number.isInteger(delta) || delta === 0 || !reason) return res.status(400).json({ error: "Address, a non-zero whole number and a reason are required" });
-  const cur = db.prepare("SELECT credits FROM users WHERE address = ?").get(a)?.credits ?? 0;
-  if (cur + delta < 0) return res.status(400).json({ error: "Balance cannot go below zero" });
+  const cur = db.prepare("SELECT credits FROM accounts WHERE address = ?").get(a)?.credits ?? 0;
+  if (cur + delta < 0) return res.status(400).json({ error: "Credits cannot go below zero" });
   addCredits(a, delta, "admin: " + reason, "");
   res.json({ ok: true });
 }));
@@ -384,7 +296,7 @@ app.post("/api/admin/credits/adjust", admin, wrap(async (req, res) => {
 app.post("/api/admin/sync/:address", admin, wrap(async (req, res) => {
   const a = addr(req.params.address);
   if (!a) return res.status(400).json({ error: "Bad address" });
-  res.json({ subscription: await syncSub(a) });
+  res.json({ account: await syncAccount(a) });
 }));
 
 app.use("/api", (req, res) => res.status(404).json({ error: "Not found" }));

@@ -26,15 +26,14 @@
   </section>
 
   <section class="card hide" id="setup" style="max-width:620px">
-    <h2>Setup: deploy the subscription contract</h2>
-    <p class="muted small">This is done once. Your wallet sends the deployment transaction, so no private key is stored anywhere. The wallet you connect becomes the contract owner: only it can create plans, charge renewals and cancel subscriptions. You need a little BNB for the network fee.</p>
+    <h2>Setup: deploy the billing contract</h2>
+    <p class="muted small">This is done once. Your wallet sends the deployment transaction, so no private key is stored anywhere. The wallet you connect becomes the contract owner: only it can charge users and change settings. You need a little BNB for the network fee.</p>
     <dl class="kv" style="margin-bottom:12px">
       <dt>Network</dt><dd id="suChain"></dd>
       <dt>USDT token</dt><dd class="mono" id="suUsdt"></dd>
       <dt>Owner wallet</dt><dd class="mono" id="suOwner">not connected</dd>
     </dl>
-    <label class="f">Treasury address (where USDT payments are sent)<input id="suTreasury" placeholder="0x… (connect wallet to use its address)"></label>
-    <label class="f" style="max-width:260px">Shortest allowed plan period (days)<input id="suDays" inputmode="decimal" value="1"></label>
+    <label class="f">Treasury address (where USDT charges are sent)<input id="suTreasury" placeholder="0x… (connect wallet to use its address)"></label>
     <div class="row">
       <button class="ghost" id="suConnect">1. Connect owner wallet</button>
       <button id="suDeploy" disabled>2. Deploy contract</button>
@@ -49,66 +48,57 @@
     <div id="actMsg" class="msg hide"></div>
 
     <div class="tabs" id="tabs">
-      <button data-t="plans" class="on">Plans</button>
-      <button data-t="subs">Subscriptions</button>
-      <button data-t="users">Credit balances</button>
-      <button data-t="pays">Payment history</button>
+      <button data-t="users" class="on">Customers</button>
+      <button data-t="charges">Charge history</button>
+      <button data-t="credits">Credits</button>
       <button data-t="settings">Settings</button>
     </div>
 
-    <section class="card" data-p="plans">
-      <h2>Plans</h2>
-      <div class="scroll"><table><thead><tr><th>#</th><th>Name</th><th class="num">Price</th><th>Every</th><th class="num">Max charges</th><th class="num">Cap</th><th class="num">Credits / payment</th><th>Status</th><th></th></tr></thead><tbody id="planRows"></tbody></table></div>
-      <h2 style="margin-top:18px">New plan</h2>
-      <p class="muted small">Price, period and max charges are written to the contract and cannot be edited afterwards; to change terms, close the plan and create a new one. Existing subscribers always keep the terms they signed up with.</p>
-      <div class="grid">
-        <label class="f">Name<input id="npName" maxlength="60" placeholder="Starter"></label>
-        <label class="f">Price (USDT)<input id="npPrice" inputmode="decimal" placeholder="10"></label>
-        <label class="f">Period (days)<input id="npDays" inputmode="decimal" placeholder="30"></label>
-        <label class="f">Max charges (cap)<input id="npMax" inputmode="numeric" placeholder="12"></label>
-        <label class="f">Credits per payment<input id="npCredits" inputmode="numeric" placeholder="1000"></label>
-      </div>
-      <button id="npBtn" style="max-width:260px">Create plan on chain</button>
+    <section class="card" data-p="users">
+      <h2>Customers</h2>
+      <p class="muted small">Each customer set a spending limit (their USDT approval). "Charge" pulls the amount you enter from their wallet for usage they've run up — never more than what's left before their limit. The contract rejects anything over it.</p>
+      <div class="scroll"><table><thead><tr><th>Wallet</th><th class="num">Approved (left)</th><th class="num">Charged</th><th class="num">Credits</th><th>Status</th><th>Charge for usage</th></tr></thead><tbody id="userRows"></tbody></table></div>
     </section>
 
-    <section class="card hide" data-p="subs">
-      <h2>Subscriptions</h2>
-      <p class="muted small">"Charge" works only when a renewal is due and the cap is not used up; the contract rejects anything else. "Cancel" ends the subscription for the user.</p>
-      <div class="scroll"><table><thead><tr><th>Wallet</th><th>Plan</th><th class="num">Price</th><th class="num">Charges</th><th>Next charge</th><th>Status</th><th></th></tr></thead><tbody id="subRows"></tbody></table></div>
+    <section class="card hide" data-p="charges">
+      <h2>Charge history</h2>
+      <div class="scroll"><table><thead><tr><th>Date</th><th>Wallet</th><th class="num">USDT</th><th class="num">Block</th><th>Tx</th></tr></thead><tbody id="chargeRows"></tbody></table></div>
+      <h2 style="margin-top:18px">Verify a transaction manually</h2>
+      <div class="row"><input id="vTx" placeholder="0x… transaction hash"><button id="vBtn" style="max-width:160px">Verify</button></div>
     </section>
 
-    <section class="card hide" data-p="users">
-      <h2>Credit balances</h2>
-      <div class="scroll"><table><thead><tr><th>Wallet</th><th class="num">Credits</th><th>Since</th></tr></thead><tbody id="userRows"></tbody></table></div>
-      <h2 style="margin-top:18px">Adjust credits</h2>
+    <section class="card hide" data-p="credits">
+      <h2>Adjust credits</h2>
+      <p class="muted small">Credits are the usage balance you track for each customer. Charging USDT and adjusting credits are separate — charge the wallet for money, adjust credits for usage.</p>
       <div class="grid">
         <label class="f">Wallet address<input id="adjAddr" placeholder="0x…"></label>
         <label class="f">Change (+/-)<input id="adjDelta" inputmode="numeric" placeholder="-100"></label>
-        <label class="f">Reason<input id="adjReason" maxlength="120" placeholder="refund, usage, bonus…"></label>
+        <label class="f">Reason<input id="adjReason" maxlength="120" placeholder="usage, top-up, refund…"></label>
       </div>
       <button id="adjBtn" style="max-width:260px">Apply</button>
       <h2 style="margin-top:18px">Credit ledger</h2>
       <div class="scroll"><table><thead><tr><th>Date</th><th>Wallet</th><th class="num">Change</th><th>Reason</th></tr></thead><tbody id="ledgerRows"></tbody></table></div>
     </section>
 
-    <section class="card hide" data-p="pays">
-      <h2>Payment history</h2>
-      <div class="scroll"><table><thead><tr><th>Date</th><th>Wallet</th><th>Plan</th><th>Type</th><th class="num">USDT</th><th class="num">Credits</th><th class="num">Block</th><th>Tx</th></tr></thead><tbody id="payRows"></tbody></table></div>
-      <h2 style="margin-top:18px">Verify a transaction manually</h2>
-      <div class="row"><input id="vTx" placeholder="0x… transaction hash"><button id="vBtn" style="max-width:160px">Verify</button></div>
-    </section>
-
     <section class="card hide" data-p="settings">
-      <h2>Settings</h2>
-      <label class="f" style="max-width:320px">Minimum wallet balance to subscribe (USDT)<input id="minBal" inputmode="decimal"></label>
-      <p class="muted small">Shown to users as the eligibility rule. A plan's own price is always required as well.</p>
-      <button id="minBtn" style="max-width:260px">Save</button>
+      <h2>Spending limits shown to users</h2>
+      <label class="f" style="max-width:360px">Suggested limits (USDT, comma separated)<input id="setLimits" placeholder="50, 200, 1000"></label>
+      <div class="grid" style="max-width:520px">
+        <label class="f">Smallest limit allowed<input id="setMin" inputmode="decimal"></label>
+        <label class="f">Largest limit allowed<input id="setMax" inputmode="decimal"></label>
+      </div>
+      <button id="setBtn" style="max-width:220px">Save</button>
+
+      <h2 style="margin-top:22px">On-chain safety: max per single charge</h2>
+      <p class="muted small">An extra guard: the most any one charge can pull, on top of each user's own limit. Set it to cover your biggest expected single bill. 0 means no extra cap (a user's remaining limit is still the hard bound). Changing it is an owner transaction.</p>
+      <div class="row" style="max-width:420px"><input id="maxPer" inputmode="decimal" placeholder="e.g. 200"><button id="maxPerBtn" style="max-width:200px">Set on chain</button></div>
+
       <dl class="kv" style="margin-top:18px;max-width:640px">
         <dt>Contract</dt><dd class="mono" id="iContract"></dd>
         <dt>Owner</dt><dd class="mono" id="iOwner"></dd>
         <dt>Treasury</dt><dd class="mono" id="iTreasury"></dd>
         <dt>USDT</dt><dd class="mono" id="iUsdt"></dd>
-        <dt>Shortest plan period</dt><dd id="iMinPeriod"></dd>
+        <dt>Max per charge</dt><dd id="iMaxPer"></dd>
       </dl>
     </section>
   </div>

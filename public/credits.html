@@ -16,37 +16,41 @@
     <span class="chip" id="who">Not connected</span>
   </div>
 
-  <div id="okNote" class="note good hide" style="margin:0 0 14px">Autopay started. Your first credits are in.</div>
+  <div id="okNote" class="note good hide" style="margin:0 0 14px">Spending limit set. You can start using credits — you'll only be billed for what you use.</div>
 
   <section class="wallet" aria-live="polite">
-    <div class="label"><span>Your AI credits</span><span class="state" id="state">No autopay</span></div>
+    <div class="label"><span>Your AI credits</span><span class="state" id="state">—</span></div>
     <div class="amount empty" id="credits">0</div>
-    <div class="status" id="status">Connect your wallet to see your credits.</div>
+    <div class="status" id="status">Connect your wallet to see your account.</div>
     <button id="connectBtn">Connect wallet</button>
     <a class="btn hide" id="twBtn" href="#">Open in Trust Wallet</a>
-    <a class="btn hide" id="planBtn" href="/">Choose a plan</a>
+    <a class="btn hide" id="setBtn" href="/">Set a spending limit</a>
   </section>
 
   <section id="details" class="hide">
-    <h2>Autopay</h2>
+    <h2>Spending limit</h2>
     <dl class="rows">
-      <div><dt>Plan</dt><dd id="dPlan"></dd></div>
-      <div><dt>Payments made</dt><dd id="dCharges"></dd></div>
-      <div><dt>Next payment</dt><dd id="dNext"></dd></div>
-      <div><dt>Can still be charged</dt><dd id="dRemain"></dd></div>
-      <div><dt>Approved in wallet</dt><dd id="dAllow"></dd></div>
+      <div><dt>Still approved to spend</dt><dd id="dRemain"></dd></div>
+      <div><dt>Charged so far</dt><dd id="dUsed"></dd></div>
+      <div><dt>Wallet balance</dt><dd id="dBal"></dd></div>
     </dl>
     <div class="pair">
-      <button class="stop" id="stopBtn">Stop autopay</button>
-      <button class="quiet" id="revokeBtn">Remove approval</button>
+      <a class="btn quiet" id="raiseBtn" href="/">Change limit</a>
+      <button class="stop" id="stopBtn">Stop billing</button>
     </div>
-    <div id="actNote" class="note hide"></div>
-    <p class="fine">Stopping autopay blocks every future payment straight away. Credits you already paid for stay yours. Removing the approval sets the wallet's USDT limit for this site back to zero.</p>
+    <p class="fine">Stopping billing blocks every future charge on chain straight away, even if a limit is still set. You can also lower the limit, or set it to zero, from the home page. Credits you already have stay yours.</p>
   </section>
 
+  <section id="stopped" class="hide">
+    <div class="note warn">Billing is stopped for this wallet. No charges can be made. To use credits again, set a spending limit.</div>
+    <button id="resumeBtn" style="margin-top:12px">Resume billing</button>
+  </section>
+
+  <div id="actNote" class="note hide"></div>
+
   <section id="history" class="hide">
-    <h2>Payments</h2>
-    <div class="rows" id="pays"></div>
+    <h2>Charges</h2>
+    <div class="rows" id="charges"></div>
   </section>
 
   <div id="pageNote" class="note hide"></div>

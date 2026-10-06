@@ -2,18 +2,19 @@
 // Shared by the home page and the AI credits page.
 window.App = (() => {
   const $ = (id) => document.getElementById(id);
-  const SUB_ABI = [
-    "function subs(address) view returns (uint32 planId, uint128 price, uint32 period, uint16 maxCharges, uint16 charges, uint64 nextChargeAt, bool active)",
-    "function remainingCap(address) view returns (uint256)",
-    "function subscribe(uint256 planId, uint256 expectedPrice)",
-    "function cancel()",
+  const BILL_ABI = [
+    "function remaining(address) view returns (uint256)",
+    "function totalCharged(address) view returns (uint256)",
+    "function stopped(address) view returns (bool)",
+    "function stop()",
+    "function resume()",
   ];
   const ERC20_ABI = [
     "function balanceOf(address) view returns (uint256)",
     "function allowance(address owner, address spender) view returns (uint256)",
     "function approve(address spender, uint256 value) returns (bool)",
   ];
-  const A = { $, cfg: null, me: null, usdt: null, sub: null };
+  const A = { $, cfg: null, me: null, usdt: null, bill: null };
 
   A.api = async (path, opts) => {
     const r = await fetch(path, opts);
@@ -83,7 +84,7 @@ window.App = (() => {
     A.me = await signer.getAddress();
     A.provider = provider;
     A.usdt = new ethers.Contract(A.cfg.usdt, ERC20_ABI, signer);
-    A.sub = new ethers.Contract(A.cfg.contract, SUB_ABI, signer);
+    A.bill = new ethers.Contract(A.cfg.contract, BILL_ABI, signer);
     eth.on?.("accountsChanged", () => location.reload());
     eth.on?.("chainChanged", () => location.reload());
     return A.me;
