@@ -59,6 +59,7 @@ window.App = (() => {
     if (!accounts?.length) return null;
     const hex = "0x" + A.cfg.chainId.toString(16);
     if ((await eth.request({ method: "eth_chainId" })) !== hex) {
+      if (!prompt) return null; // never open a wallet popup on page load
       try {
         await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
       } catch (e) {
@@ -74,6 +75,7 @@ window.App = (() => {
     if (Number((await provider.getNetwork()).chainId) !== A.cfg.chainId) throw new Error("Switch your wallet to BNB Smart Chain and try again.");
     const signer = await provider.getSigner(accounts[0]);
     A.me = await signer.getAddress();
+    A.provider = provider;
     A.usdt = new ethers.Contract(A.cfg.usdt, ERC20_ABI, signer);
     A.sub = new ethers.Contract(A.cfg.contract, SUB_ABI, signer);
     eth.on?.("accountsChanged", () => location.reload());

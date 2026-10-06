@@ -54,6 +54,9 @@
     $("autopay").classList.toggle("hide", !e.eligible);
     $("checkBtn").textContent = "Check again";
     $("checkBtn").classList.toggle("hide", e.eligible);
+    // every wallet confirmation costs a little BNB; say so before the user hits a wallet error
+    const bnb = e.eligible ? await A.provider.getBalance(A.me).catch(() => 1n) : 1n;
+    A.note("apNote", bnb === 0n ? "This wallet has no BNB. Add a little BNB (BEP-20) for the network fee, then start autopay." : "", "warn");
   }
 
   async function check() {
@@ -62,6 +65,7 @@
       btn.disabled = true; btn.textContent = "Checking…";
       A.note("pageNote");
       if (!A.me) await A.connect(true);
+      if (!A.me) throw new Error("Connect your wallet to check the balance.");
       $("who").textContent = A.short(A.me);
       $("net").classList.add("on");
       const [s, a] = await Promise.all([A.sub.subs(A.me), A.usdt.allowance(A.me, A.cfg.contract)]);
@@ -108,6 +112,13 @@
     $("st2").querySelector(".dot").textContent = "2";
     step(1, "", ""); step(2, "", "");
     try {
+      // the balance may have changed since it was checked
+      if ((await A.usdt.balanceOf(A.me)) < price) {
+        await judge();
+        throw new Error(`This wallet no longer has ${A.fmt(price)} USDT for the first payment.`);
+      }
+      const s = await A.sub.subs(A.me);
+      if (s.active) { location.href = "/credits.html"; return; } // started in another tab
       // 1. approve exactly the plan's limit, never more
       allowance = await A.usdt.allowance(A.me, A.cfg.contract);
       if (allowance < cap) {
@@ -162,5 +173,17 @@
     }
     $("checkBtn").onclick = check;
     $("startBtn").onclick = start;
+    if (!A.wallet() || !A.cfg.plans.length) return;
+
+    // A payment that was sent but not confirmed before the page closed: finish it first.
+    const pending = A.store.get("pendingTx");
+    if (pending) {
+      $("status").textContent = "Finishing your last payment…";
+      try { await A.confirmOnChain(pending); A.store.set("pendingTx", null); location.href = "/credits.html?started=1"; return; }
+      catch { A.store.set("pendingTx", null); $("status").textContent = "Check your balance to see if this wallet can start autopay."; }
+    }
+    // Wallet browsers that already share the address (Trust Wallet does) need no connect step:
+    // show the balance straight away. Otherwise the button asks once.
+    if (await A.connect(false).catch(() => null)) await check();
   })().catch((e) => A.note("pageNote", "Could not load the site: " + A.errText(e), "bad"));
 })();
