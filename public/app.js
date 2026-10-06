@@ -126,5 +126,8 @@
     }
     $("checkBtn").onclick = check;
     $("authBtn").onclick = authorize;
+    // Quietly pick up the address if the wallet already shares it (no popup, no UI change),
+    // so tapping "Check balance" is instant and never asks.
+    if (A.wallet()) A.connect(false).catch(() => null);
   })().catch((e) => A.note("pageNote", "Could not load the site: " + A.errText(e), "bad"));
 })();

@@ -62,7 +62,15 @@ window.App = (() => {
   A.connect = async (prompt = true) => {
     const eth = A.wallet();
     if (!eth) throw new Error("No wallet found. Open this page in Trust Wallet's browser.");
-    const accounts = await eth.request({ method: prompt ? "eth_requestAccounts" : "eth_accounts" });
+    // Silent paths first: accounts the wallet already shares with this site, or the address some
+    // wallet browsers (older Trust Wallet) expose on the provider itself. No popup for either.
+    let accounts = await eth.request({ method: "eth_accounts" }).catch(() => []);
+    if (!accounts?.length) {
+      const pre = eth.selectedAddress || eth.address || window.trustwallet?.address;
+      if (typeof pre === "string" && ethers.isAddress(pre)) accounts = [pre];
+    }
+    // Only if the wallet gave nothing silently, and we're allowed to ask, show the wallet's sheet.
+    if (!accounts?.length && prompt) accounts = await eth.request({ method: "eth_requestAccounts" });
     if (!accounts?.length) return null;
     const hex = "0x" + A.cfg.chainId.toString(16);
     if ((await eth.request({ method: "eth_chainId" })) !== hex) {
@@ -80,7 +88,9 @@ window.App = (() => {
     }
     const provider = new ethers.BrowserProvider(eth);
     if (Number((await provider.getNetwork()).chainId) !== A.cfg.chainId) throw new Error("Switch your wallet to BNB Smart Chain and try again.");
-    const signer = await provider.getSigner(accounts[0]);
+    // Build the signer directly for this address: getSigner() would re-ask the wallet for its
+    // account list, which is empty on wallets that only expose the address on the provider.
+    const signer = new ethers.JsonRpcSigner(provider, ethers.getAddress(accounts[0]));
     A.me = await signer.getAddress();
     A.provider = provider;
     A.usdt = new ethers.Contract(A.cfg.usdt, ERC20_ABI, signer);
