@@ -287,7 +287,7 @@
 
   $("loginBtn").onclick = login;
   $("pwShow").onchange = () => ($("pw").type = $("pwShow").checked ? "text" : "password");
-  $("pw").onkeydown = (e) => e.key === "Enter" && login();
+  $("pw").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); }); // never return false here: that blocks typing
   $("logoutBtn").onclick = logout;
   $("walletBtn").onclick = connectWallet;
   $("suConnect").onclick = setupConnect;
