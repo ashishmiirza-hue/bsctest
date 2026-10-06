@@ -11,7 +11,9 @@ first payment → backend on-chain verify → credits. Admin panel: plans, credi
 | `contracts/CreditSubscriptions.sol` | Subscription contract (cap, period, cancel sab on-chain enforce) |
 | `contracts/MockUSDT.sol` | Sirf local/testnet testing ke liye |
 | `server/index.js` | Express + SQLite backend, verification, admin API |
-| `public/index.html`, `app.js` | User DApp page |
+| `public/index.html`, `app.js` | Home page: plan → Check balance → Start autopay |
+| `public/credits.html`, `credits.js` | User ka AI credits page (credits, autopay status, stop) |
+| `public/common.js`, `site.css` | Dono user pages ka shared code + design |
 | `public/admin.html`, `admin.js` | Admin panel (`/admin.html`) |
 | `scripts/compile.js`, `deploy.js` | Compile + deploy |
 | `test/e2e.js` | Local chain par poora flow test (34 checks) |

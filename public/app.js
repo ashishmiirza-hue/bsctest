@@ -1,338 +1,166 @@
-/* global ethers */
+/* global App */
+// Home page: pick a plan -> Check balance -> Start autopay (approve limit + first payment) -> AI credits page.
 (() => {
-  const $ = (id) => document.getElementById(id);
-  const SUB_ABI = [
-    "function subs(address) view returns (uint32 planId, uint128 price, uint32 period, uint16 maxCharges, uint16 charges, uint64 nextChargeAt, bool active)",
-    "function remainingCap(address) view returns (uint256)",
-    "function subscribe(uint256 planId, uint256 expectedPrice)",
-    "function cancel()",
-  ];
-  const ERC20_ABI = [
-    "function balanceOf(address) view returns (uint256)",
-    "function allowance(address owner, address spender) view returns (uint256)",
-    "function approve(address spender, uint256 value) returns (bool)",
-  ];
-
-  let cfg, eth, provider, signer, me, usdt, sub, plan, balance = 0n, allowance = 0n, eligible = false, activeSub = false;
-
-  const fmt = (v) => {
-    const s = ethers.formatUnits(v, cfg.decimals);
-    const [a, b = ""] = s.split(".");
-    const frac = b.slice(0, 4).replace(/0+$/, "");
-    return Number(a).toLocaleString("en-US") + (frac ? "." + frac : "");
-  };
-  const every = (sec) => {
-    if (sec % 86400 === 0) { const d = sec / 86400; return d === 1 ? "day" : d + " days"; }
-    if (sec % 3600 === 0) return sec / 3600 + " hours";
-    return sec + " seconds";
-  };
-  const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
-  const date = (t) => new Date(t * 1000).toLocaleString();
-  const msg = (id, text, kind) => {
-    const el = $(id);
-    el.textContent = text || "";
-    el.className = "msg" + (kind ? " " + kind : "") + (text ? "" : " hide");
-  };
-  const errText = (e) => {
-    if (e?.code === "ACTION_REJECTED" || e?.code === 4001) return "You rejected the request in your wallet.";
-    return e?.shortMessage || e?.reason || e?.message || "Something went wrong.";
-  };
-  const api = async (path, opts) => {
-    const r = await fetch(path, opts);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || "Request failed");
-    return j;
-  };
-  const busy = (btn, on, label) => {
-    btn.disabled = on;
-    if (label) btn.textContent = label;
-  };
-
-  async function init() {
-    cfg = await api("/api/config");
-    if (cfg.setup) {
-      $("connectBtn").disabled = true;
-      msg("msg1", "This site is still being set up. Please check back soon.", "warn");
-      return;
-    }
-    $("cAddr").textContent = cfg.contract;
-    eth = window.ethereum || window.trustwallet;
-    if (!eth) {
-      $("noWallet").classList.remove("hide");
-      $("twLink").href = "https://link.trustwallet.com/open_url?coin_id=20000714&url=" + encodeURIComponent(location.href);
-      $("connectBtn").disabled = true;
-    }
-    renderPlans();
-    $("connectBtn").onclick = connect;
-    $("ack").onchange = refreshButtons;
-    $("approveBtn").onclick = approve;
-    $("subBtn").onclick = subscribe;
-    $("cancelBtn").onclick = cancel;
-    $("revokeBtn").onclick = revoke;
-  }
+  const A = App, $ = A.$;
+  let plan = null, balance = 0n, allowance = 0n, checked = false, running = false;
 
   function renderPlans() {
     const box = $("plans");
     box.textContent = "";
-    if (!cfg.plans.length) {
-      box.innerHTML = '<p class="muted">No plans are available right now.</p>';
-      return;
-    }
-    for (const p of cfg.plans) {
+    A.cfg.plans.forEach((p, i) => {
       const l = document.createElement("label");
       l.className = "plan";
       const r = document.createElement("input");
       r.type = "radio"; r.name = "plan"; r.value = p.planId;
-      r.onchange = () => selectPlan(p, l);
-      const price = document.createElement("span");
-      price.className = "price";
-      price.textContent = fmt(p.price) + " USDT / " + every(p.period);
-      const name = document.createElement("b");
-      name.textContent = p.name;
-      const sub2 = document.createElement("div");
-      sub2.className = "muted small";
-      sub2.textContent = p.credits.toLocaleString("en-US") + " credits per payment" + (p.description ? " · " + p.description : "");
-      l.append(r, name, price, sub2);
+      r.onchange = () => { choose(p, l); };
+      const name = document.createElement("span"); name.className = "name"; name.textContent = p.name;
+      const price = document.createElement("span"); price.className = "price"; price.textContent = `${A.fmt(p.price)} USDT / ${A.every(p.period)}`;
+      const what = document.createElement("span"); what.className = "what";
+      what.textContent = `${A.num(p.credits)} AI credits every ${A.every(p.period)}` + (p.description ? `. ${p.description}` : "");
+      l.append(r, name, price, what);
       box.append(l);
-    }
+      if (i === 0) { r.checked = true; choose(p, l); }
+    });
   }
 
-  async function connect() {
-    try {
-      msg("msg1");
-      busy($("connectBtn"), true, "Connecting…");
-      const accounts = await eth.request({ method: "eth_requestAccounts" });
-      const hex = "0x" + cfg.chainId.toString(16);
-      if ((await eth.request({ method: "eth_chainId" })) !== hex) {
-        try {
-          await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
-        } catch (e) {
-          if (cfg.chainId !== 56 || (e.code !== 4902 && e.code !== -32603)) throw e;
-          await eth.request({
-            method: "wallet_addEthereumChain",
-            params: [{
-              chainId: "0x38", chainName: "BNB Smart Chain",
-              nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
-              rpcUrls: ["https://bsc-dataseed.binance.org"], blockExplorerUrls: ["https://bscscan.com"],
-            }],
-          });
-        }
-      }
-      provider = new ethers.BrowserProvider(eth);
-      const net = await provider.getNetwork();
-      if (Number(net.chainId) !== cfg.chainId) throw new Error("Please switch your wallet to BNB Smart Chain and try again.");
-      signer = await provider.getSigner(accounts[0]);
-      me = await signer.getAddress();
-      usdt = new ethers.Contract(cfg.usdt, ERC20_ABI, signer);
-      sub = new ethers.Contract(cfg.contract, SUB_ABI, signer);
-
-      $("netPill").textContent = cfg.chainId === 56 ? "BNB Smart Chain" : "chain " + cfg.chainId;
-      $("netPill").className = "pill ok";
-      $("addr").textContent = short(me);
-      $("connectBtn").classList.add("hide");
-      $("walletInfo").classList.remove("hide");
-      $("st1").classList.add("done");
-      eth.on?.("accountsChanged", () => location.reload());
-      eth.on?.("chainChanged", () => location.reload());
-      await refresh();
-    } catch (e) {
-      busy($("connectBtn"), false, "Connect");
-      msg("msg1", errText(e), "bad");
-    }
-  }
-
-  // Re-read everything from chain and backend.
-  async function refresh() {
-    const [b, a, s, remain, acct] = await Promise.all([
-      usdt.balanceOf(me), usdt.allowance(me, cfg.contract), sub.subs(me), sub.remainingCap(me), api("/api/account/" + me),
-    ]);
-    balance = b; allowance = a; activeSub = s.active;
-    $("bal").textContent = fmt(balance) + " USDT";
-    $("credits").textContent = acct.credits.toLocaleString("en-US");
-
-    const hasSub = Number(s.period) > 0;
-    $("acct").classList.toggle("hide", !hasSub && allowance === 0n);
-    if (hasSub || allowance > 0n) {
-      const done = !s.active && Number(s.charges) >= Number(s.maxCharges);
-      $("subPill").textContent = !hasSub ? "none" : s.active ? "active" : done ? "completed" : "cancelled";
-      $("subPill").className = "pill " + (s.active ? "ok" : "warn");
-      const p = cfg.plans.find((x) => x.planId === Number(s.planId));
-      $("subPlan").textContent = hasSub ? (p?.name || "Plan #" + s.planId) + " · " + fmt(s.price) + " USDT / " + every(Number(s.period)) : "–";
-      $("subCharges").textContent = hasSub ? s.charges + " of " + s.maxCharges : "–";
-      $("subNext").textContent = s.active ? date(Number(s.nextChargeAt)) : "–";
-      $("subRemain").textContent = fmt(remain) + " USDT";
-      $("subAllow").textContent = fmt(allowance) + " USDT";
-      $("cancelBtn").disabled = !s.active;
-      $("revokeBtn").disabled = allowance === 0n;
-    }
-
-    const body = $("histBody");
-    body.textContent = "";
-    $("hist").classList.toggle("hide", !acct.payments.length);
-    for (const p of acct.payments) {
-      const tr = document.createElement("tr");
-      const cells = [date(p.paid_at), p.kind === "first" ? "First payment" : "Renewal", fmt(p.amount), p.credits.toLocaleString("en-US")];
-      cells.forEach((c, i) => { const td = document.createElement("td"); td.textContent = c; if (i > 1) td.className = "num"; tr.append(td); });
-      const td = document.createElement("td");
-      if (cfg.explorer) {
-        const link = document.createElement("a");
-        link.href = cfg.explorer + "/tx/" + p.tx_hash; link.target = "_blank"; link.rel = "noopener"; link.textContent = short(p.tx_hash);
-        td.append(link);
-      } else td.textContent = short(p.tx_hash);
-      tr.append(td);
-      body.append(tr);
-    }
-
-    $("s2").classList.toggle("off", activeSub);
-    if (activeSub) {
-      msg("elig", "You already have an active subscription. Cancel it first if you want a different plan.", "warn");
-      $("s3").classList.add("off"); $("s4").classList.add("off");
-    } else if (plan) await checkEligibility();
-    else msg("elig");
-    refreshButtons();
-  }
-
-  async function selectPlan(p, label) {
+  function choose(p, label) {
+    if (running) return;
     plan = p;
-    document.querySelectorAll(".plan").forEach((el) => el.classList.remove("sel"));
-    label.classList.add("sel");
-    $("ack").checked = false;
-    const cap = fmt(p.cap), price = fmt(p.price);
-    $("ackCap").textContent = cap;
-    $("disc").innerHTML = "";
-    const head = document.createElement("b");
-    head.textContent = "What you are authorizing";
-    const ul = document.createElement("ul");
-    [
-      `You allow the subscription contract to take at most ${cap} USDT from this wallet in total. It is not an unlimited approval.`,
-      p.maxCharges > 1
-        ? `${price} USDT is charged now. After that, up to ${p.maxCharges - 1} more charge(s) of ${price} USDT, never more often than once every ${every(p.period)}.`
-        : `${price} USDT is charged now. There are no further charges.`,
-      `Each successful charge adds ${p.credits.toLocaleString("en-US")} credits to your account.`,
-      `The price cannot be raised for your subscription. After ${p.maxCharges} charge(s) it ends by itself and a new authorization is needed.`,
-      `You can cancel on this page at any time. Cancelling blocks every future charge. You can also set the allowance back to zero.`,
-      `A small BNB network fee is paid to the network for each transaction you send.`,
-    ].forEach((t) => { const li = document.createElement("li"); li.textContent = t; ul.append(li); });
-    const c = document.createElement("div");
-    c.className = "muted small mono";
-    c.style.marginTop = "8px";
-    c.textContent = "Spender: " + cfg.contract;
-    $("disc").append(head, ul, c);
-    $("payLine").textContent = `First payment: ${price} USDT for ${p.credits.toLocaleString("en-US")} credits.`;
-    $("st2").classList.add("done");
-    if (me) await checkEligibility();
-    refreshButtons();
+    document.querySelectorAll(".plan").forEach((el) => el.classList.toggle("sel", el === label));
+    $("apPlan").textContent = p.name;
+    $("tNow").textContent = `${A.fmt(p.price)} USDT`;
+    $("tThen").textContent = p.maxCharges > 1 ? `${A.fmt(p.price)} USDT every ${A.every(p.period)}, up to ${p.maxCharges - 1} more time${p.maxCharges > 2 ? "s" : ""}` : "Nothing more";
+    $("tCredits").textContent = A.num(p.credits);
+    $("tCap").textContent = `${A.fmt(p.cap)} USDT`;
+    $("startBtn").textContent = "Start autopay for AI credits";
+    if (checked) judge();
   }
 
-  async function checkEligibility() {
+  // Decide what the wallet panel offers for the chosen plan.
+  async function judge() {
+    const e = await A.api(`/api/eligibility/${A.me}?planId=${plan.planId}`); // balance is read on chain by the server
+    balance = BigInt(e.balance);
+    const el = $("amount");
+    el.firstChild.textContent = A.fmt(balance);
+    el.classList.remove("empty");
+    const st = $("status");
+    if (e.eligible) {
+      st.textContent = `This wallet can start ${plan.name}.`;
+      st.className = "status good";
+    } else {
+      st.textContent = `${plan.name} needs at least ${A.fmt(e.required)} USDT in the wallet. Add USDT (BEP-20) and check again.`;
+      st.className = "status bad";
+    }
+    $("autopay").classList.toggle("hide", !e.eligible);
+    $("checkBtn").textContent = "Check again";
+    $("checkBtn").classList.toggle("hide", e.eligible);
+  }
+
+  async function check() {
+    const btn = $("checkBtn");
     try {
-      const e = await api(`/api/eligibility/${me}?planId=${plan.planId}`);
-      eligible = e.eligible;
-      balance = BigInt(e.balance);
-      $("bal").textContent = fmt(balance) + " USDT";
-      if (eligible) msg("elig", `Eligible. Your balance is ${fmt(e.balance)} USDT; this plan needs at least ${fmt(e.required)} USDT.`, "ok");
-      else msg("elig", `Not eligible yet. This plan needs a balance of at least ${fmt(e.required)} USDT; your wallet has ${fmt(e.balance)} USDT.`, "bad");
+      btn.disabled = true; btn.textContent = "Checking…";
+      A.note("pageNote");
+      if (!A.me) await A.connect(true);
+      $("who").textContent = A.short(A.me);
+      $("net").classList.add("on");
+      const [s, a] = await Promise.all([A.sub.subs(A.me), A.usdt.allowance(A.me, A.cfg.contract)]);
+      allowance = a;
+      if (s.active) {
+        // already on autopay: show the balance and send them to their credits
+        const b = await A.usdt.balanceOf(A.me);
+        $("amount").firstChild.textContent = A.fmt(b);
+        $("amount").classList.remove("empty");
+        $("status").textContent = "Autopay is already running for this wallet.";
+        $("status").className = "status good";
+        btn.classList.add("hide");
+        $("openBtn").classList.remove("hide");
+        $("autopay").classList.add("hide");
+        return;
+      }
+      if (!plan) throw new Error("No plans are available yet.");
+      await judge();
+      $("amount").classList.add("reveal");
+      checked = true;
     } catch (e) {
-      eligible = false;
-      msg("elig", errText(e), "bad");
+      $("status").textContent = A.errText(e);
+      $("status").className = "status bad";
+      btn.textContent = "Check balance";
+    } finally {
+      btn.disabled = false;
     }
   }
 
-  function refreshButtons() {
-    const ready = !!me && !!plan && eligible && !activeSub;
-    const approved = ready && allowance >= BigInt(plan.cap);
-    $("s3").classList.toggle("off", !ready);
-    $("s4").classList.toggle("off", !approved);
-    $("st3").classList.toggle("done", approved);
-    $("approveBtn").disabled = !ready || approved || !$("ack").checked;
-    $("approveBtn").textContent = approved ? "Authorized" : plan ? `Authorize up to ${fmt(plan.cap)} USDT` : "Authorize";
-    $("subBtn").disabled = !approved;
-    if (plan) $("subBtn").textContent = `Subscribe and pay ${fmt(plan.price)} USDT`;
-  }
+  const step = (n, state, text) => {
+    $("st" + n).className = state;
+    $("st" + n + "s").textContent = text || "";
+    if (state === "done") $("st" + n).querySelector(".dot").textContent = "✓";
+  };
 
-  async function approve() {
-    const btn = $("approveBtn");
+  async function start() {
+    const btn = $("startBtn");
+    const cap = BigInt(plan.cap), price = BigInt(plan.price);
+    running = true;
+    btn.disabled = true;
+    A.note("apNote");
+    $("steps").classList.remove("hide");
+    $("st1").querySelector(".dot").textContent = "1";
+    $("st2").querySelector(".dot").textContent = "2";
+    step(1, "", ""); step(2, "", "");
     try {
-      busy(btn, true, "Confirm in wallet…");
-      msg("msg3");
-      const tx = await usdt.approve(cfg.contract, BigInt(plan.cap)); // exactly the cap, never unlimited
-      btn.textContent = "Waiting for confirmation…";
-      await tx.wait();
-      allowance = await usdt.allowance(me, cfg.contract);
-      msg("msg3", `Authorized ${fmt(allowance)} USDT.`, "ok");
+      // 1. approve exactly the plan's limit, never more
+      allowance = await A.usdt.allowance(A.me, A.cfg.contract);
+      if (allowance < cap) {
+        step(1, "now", `Confirm ${A.fmt(cap)} USDT in your wallet`);
+        btn.textContent = "Confirm in your wallet…";
+        const tx = await A.usdt.approve(A.cfg.contract, cap);
+        step(1, "now", "Waiting for the network");
+        await tx.wait();
+      }
+      step(1, "done", `Limit set to ${A.fmt(cap)} USDT`);
+
+      // 2. first payment
+      step(2, "now", `Confirm ${A.fmt(price)} USDT in your wallet`);
+      btn.textContent = "Confirm in your wallet…";
+      const tx2 = await A.sub.subscribe(plan.planId, price);
+      A.store.set("pendingTx", tx2.hash);
+      step(2, "now", "Waiting for the network");
+      btn.textContent = "Starting autopay…";
+      await tx2.wait();
+      await A.confirmOnChain(tx2.hash, (t) => step(2, "now", t));
+      A.store.set("pendingTx", null);
+      step(2, "done", "Paid. Credits added.");
+      btn.textContent = "Autopay started";
+      location.href = "/credits.html?started=1";
     } catch (e) {
-      msg("msg3", errText(e), "bad");
-    }
-    await refresh().catch(() => {});
-  }
-
-  async function waitCredited(txHash, msgId) {
-    for (let i = 0; i < 90; i++) {
-      const r = await api("/api/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ txHash }) });
-      if (r.status === "confirmed") return r;
-      if (r.status === "failed" || r.status === "ignored") throw new Error(r.reason || "The transaction failed on chain.");
-      msg(msgId, r.status === "confirming" ? `Confirming on chain: ${r.confirmations} of ${r.required} blocks…` : "Waiting for the transaction to be mined…");
-      await new Promise((res) => setTimeout(res, 3000));
-    }
-    throw new Error("Still unconfirmed. Your payment is safe; reload this page in a minute and it will be picked up. Tx: " + txHash);
-  }
-
-  async function subscribe() {
-    const btn = $("subBtn");
-    try {
-      busy(btn, true, "Confirm in wallet…");
-      msg("msg4");
-      const tx = await sub.subscribe(plan.planId, BigInt(plan.price));
-      btn.textContent = "Waiting for confirmation…";
-      localStorage.setItem("pendingTx", tx.hash);
-      await tx.wait();
-      const r = await waitCredited(tx.hash, "msg4");
-      localStorage.removeItem("pendingTx");
-      $("st4").classList.add("done");
-      await refresh();
-      msg("msg4", `Payment confirmed. ${r.credited.toLocaleString("en-US")} credits added.`, "ok");
-    } catch (e) {
-      msg("msg4", errText(e), "bad");
-      await refresh().catch(() => {});
+      running = false;
+      btn.disabled = false;
+      btn.textContent = "Start autopay for AI credits";
+      ["st1", "st2"].forEach((id) => { if ($(id).className === "now") { $(id).className = ""; $(id + "s").textContent = ""; } });
+      A.note("apNote", A.errText(e), "bad");
     }
   }
 
-  async function cancel() {
-    const btn = $("cancelBtn");
-    try {
-      busy(btn, true, "Confirm in wallet…");
-      msg("msgA");
-      const tx = await sub.cancel();
-      await tx.wait();
-      await waitCredited(tx.hash, "msgA").catch(() => {});
-      await refresh();
-      msg("msgA", "Subscription cancelled. No further charges are possible. You can also revoke the remaining allowance.", "ok");
-    } catch (e) {
-      msg("msgA", errText(e), "bad");
+  (async () => {
+    await A.loadConfig();
+    if (A.cfg.setup) {
+      $("checkBtn").disabled = true;
+      return A.note("pageNote", "This site is still being set up. Check back soon.", "warn");
     }
-    btn.textContent = "Cancel subscription";
-  }
-
-  async function revoke() {
-    const btn = $("revokeBtn");
-    try {
-      busy(btn, true, "Confirm in wallet…");
-      msg("msgA");
-      const tx = await usdt.approve(cfg.contract, 0n);
-      await tx.wait();
-      await refresh();
-      msg("msgA", activeSub ? "Allowance is now zero. Renewals will fail until you authorize again; cancel to end the subscription." : "Allowance is now zero.", "ok");
-    } catch (e) {
-      msg("msgA", errText(e), "bad");
+    $("net").textContent = A.cfg.chainId === 56 ? "BNB Smart Chain" : A.cfg.chainId === 97 ? "BSC testnet" : "Test chain";
+    $("cAddr").textContent = A.cfg.contract;
+    renderPlans();
+    if (!A.cfg.plans.length) {
+      $("checkBtn").disabled = true;
+      A.note("pageNote", "No plans are available yet. Check back soon.", "warn");
     }
-    btn.textContent = "Revoke allowance";
-  }
-
-  init()
-    .then(() => {
-      // pick up a payment whose confirmation was interrupted (page closed, app switched)
-      const pending = localStorage.getItem("pendingTx");
-      if (pending) waitCredited(pending, "msg1").then(() => { localStorage.removeItem("pendingTx"); msg("msg1"); if (me) refresh(); }).catch(() => localStorage.removeItem("pendingTx"));
-    })
-    .catch((e) => msg("msg1", "Could not load the site configuration: " + errText(e), "bad"));
+    if (!A.wallet()) {
+      $("checkBtn").classList.add("hide");
+      $("twBtn").classList.remove("hide");
+      $("twBtn").href = A.deepLink();
+      $("status").textContent = "Open this page in Trust Wallet's browser to check your balance.";
+    }
+    $("checkBtn").onclick = check;
+    $("startBtn").onclick = start;
+  })().catch((e) => A.note("pageNote", "Could not load the site: " + A.errText(e), "bad"));
 })();

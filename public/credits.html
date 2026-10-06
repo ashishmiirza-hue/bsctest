@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My AI credits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<main class="page">
+  <div class="bar">
+    <a class="mark" href="/">AI Credits</a>
+    <span class="chip" id="who">Not connected</span>
+  </div>
+
+  <div id="okNote" class="note good hide" style="margin:0 0 14px">Autopay started. Your first credits are in.</div>
+
+  <section class="wallet" aria-live="polite">
+    <div class="label"><span>Your AI credits</span><span class="state" id="state">No autopay</span></div>
+    <div class="amount empty" id="credits">0</div>
+    <div class="status" id="status">Connect your wallet to see your credits.</div>
+    <button id="connectBtn">Connect wallet</button>
+    <a class="btn hide" id="twBtn" href="#">Open in Trust Wallet</a>
+    <a class="btn hide" id="planBtn" href="/">Choose a plan</a>
+  </section>
+
+  <section id="details" class="hide">
+    <h2>Autopay</h2>
+    <dl class="rows">
+      <div><dt>Plan</dt><dd id="dPlan"></dd></div>
+      <div><dt>Payments made</dt><dd id="dCharges"></dd></div>
+      <div><dt>Next payment</dt><dd id="dNext"></dd></div>
+      <div><dt>Can still be charged</dt><dd id="dRemain"></dd></div>
+      <div><dt>Approved in wallet</dt><dd id="dAllow"></dd></div>
+    </dl>
+    <div class="pair">
+      <button class="stop" id="stopBtn">Stop autopay</button>
+      <button class="quiet" id="revokeBtn">Remove approval</button>
+    </div>
+    <div id="actNote" class="note hide"></div>
+    <p class="fine">Stopping autopay blocks every future payment straight away. Credits you already paid for stay yours. Removing the approval sets the wallet's USDT limit for this site back to zero.</p>
+  </section>
+
+  <section id="history" class="hide">
+    <h2>Payments</h2>
+    <div class="rows" id="pays"></div>
+  </section>
+
+  <div id="pageNote" class="note hide"></div>
+</main>
+<script src="/vendor/ethers.umd.min.js"></script>
+<script src="/common.js"></script>
+<script src="/credits.js"></script>
+</body>
+</html>

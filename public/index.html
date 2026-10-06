@@ -4,86 +4,53 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Credits</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div class="brand">AI<span>Credits</span></div>
-    <div id="netPill" class="pill">not connected</div>
-  </header>
-
-  <h1>AI credits, paid in USDT on BNB Smart Chain</h1>
-  <p class="muted">Pick a plan, authorize a fixed maximum, pay the first period. Credits arrive once the payment is confirmed on chain. Cancel whenever you like.</p>
-
-  <div id="noWallet" class="card hide">
-    <h2>Open this page in a wallet browser</h2>
-    <p class="muted">No wallet was found. Open this site inside Trust Wallet's DApp browser, or install a wallet extension.</p>
-    <a id="twLink" class="btn" style="display:block;text-align:center;text-decoration:none" href="#">Open in Trust Wallet</a>
+<main class="page">
+  <div class="bar">
+    <a class="mark" href="/">AI Credits</a>
+    <span class="chip" id="net">BNB Smart Chain</span>
   </div>
 
-  <!-- 1 -->
-  <section class="card" id="s1">
-    <div class="step" id="st1"><div class="n">1</div><h2>Connect wallet</h2></div>
-    <button id="connectBtn">Connect</button>
-    <dl class="kv hide" id="walletInfo">
-      <dt>Address</dt><dd class="mono" id="addr"></dd>
-      <dt>USDT balance</dt><dd id="bal"></dd>
-      <dt>Credits</dt><dd id="credits"></dd>
+  <h1>AI credits that top up themselves</h1>
+  <p class="lede">Pay in USDT from your wallet. Set a spending limit once and stop autopay whenever you like.</p>
+
+  <div class="plans" id="plans" role="radiogroup" aria-label="Plan"></div>
+
+  <section class="wallet" aria-live="polite">
+    <div class="label"><span>Your USDT balance</span><span id="who"></span></div>
+    <div class="amount empty" id="amount">0.00<small>USDT</small></div>
+    <div class="status" id="status">Check your balance to see if this wallet can start autopay.</div>
+    <button id="checkBtn">Check balance</button>
+    <a class="btn hide" id="twBtn" href="#">Open in Trust Wallet</a>
+    <a class="btn hide" id="openBtn" href="/credits.html">Open my AI credits</a>
+  </section>
+
+  <section id="autopay" class="hide">
+    <h2>Autopay for <span id="apPlan"></span></h2>
+    <dl class="terms">
+      <div><dt>Charged today</dt><dd id="tNow"></dd></div>
+      <div><dt>Then</dt><dd id="tThen"></dd></div>
+      <div><dt>Credits per payment</dt><dd id="tCredits"></dd></div>
+      <div><dt>Most this can ever take</dt><dd id="tCap"></dd></div>
     </dl>
-    <div id="msg1" class="msg hide"></div>
+    <button id="startBtn">Start autopay for AI credits</button>
+    <ol class="steps hide" id="steps">
+      <li id="st1"><span class="dot">1</span><span>Approve the spending limit<small id="st1s"></small></span></li>
+      <li id="st2"><span class="dot">2</span><span>Pay for the first period<small id="st2s"></small></span></li>
+    </ol>
+    <div id="apNote" class="note hide"></div>
+    <p class="fine">Your wallet will ask you to confirm twice: once to approve the limit, once for the first payment. The limit is fixed and the price cannot go up. Stop autopay any time from your AI credits page. A small BNB network fee applies. <span class="addr">Payments are handled by contract <span id="cAddr"></span>.</span></p>
   </section>
 
-  <!-- account (existing subscription) -->
-  <section class="card hide" id="acct">
-    <h2>Your subscription <span id="subPill" class="pill"></span></h2>
-    <dl class="kv">
-      <dt>Plan</dt><dd id="subPlan"></dd>
-      <dt>Charged so far</dt><dd id="subCharges"></dd>
-      <dt>Next charge not before</dt><dd id="subNext"></dd>
-      <dt>Can still be charged (max)</dt><dd id="subRemain"></dd>
-      <dt>Current USDT allowance</dt><dd id="subAllow"></dd>
-    </dl>
-    <div class="row" style="margin-top:12px">
-      <button class="danger" id="cancelBtn">Cancel subscription</button>
-      <button class="ghost" id="revokeBtn">Revoke allowance</button>
-    </div>
-    <p class="muted small" style="margin-top:10px">Cancelling stops all future charges immediately. Revoking sets the USDT allowance for the contract back to zero. Credits you already paid for stay on your account.</p>
-    <div id="msgA" class="msg hide"></div>
-  </section>
-
-  <!-- 2 -->
-  <section class="card off" id="s2">
-    <div class="step" id="st2"><div class="n">2</div><h2>Choose a plan</h2></div>
-    <div id="plans"></div>
-    <div id="elig" class="msg hide"></div>
-  </section>
-
-  <!-- 3 -->
-  <section class="card off" id="s3">
-    <div class="step" id="st3"><div class="n">3</div><h2>Review and authorize</h2></div>
-    <div class="disclosure" id="disc"></div>
-    <label class="check"><input type="checkbox" id="ack"><span>I have read the above and authorize a maximum of <b id="ackCap"></b> USDT.</span></label>
-    <button id="approveBtn" disabled>Authorize</button>
-    <div id="msg3" class="msg hide"></div>
-  </section>
-
-  <!-- 4 -->
-  <section class="card off" id="s4">
-    <div class="step" id="st4"><div class="n">4</div><h2>Pay first period</h2></div>
-    <p class="muted" id="payLine"></p>
-    <button id="subBtn" disabled>Subscribe and pay</button>
-    <div id="msg4" class="msg hide"></div>
-  </section>
-
-  <section class="card hide" id="hist">
-    <h2>Payments</h2>
-    <div class="scroll"><table><thead><tr><th>Date</th><th>Type</th><th class="num">USDT</th><th class="num">Credits</th><th>Tx</th></tr></thead><tbody id="histBody"></tbody></table></div>
-  </section>
-
-  <p class="muted small">Contract: <span class="mono" id="cAddr"></span></p>
-</div>
+  <div id="pageNote" class="note hide"></div>
+</main>
 <script src="/vendor/ethers.umd.min.js"></script>
+<script src="/common.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
