@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Admin · AI Credits</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap wide">
+  <header class="top">
+    <div class="brand">AI<span>Credits</span> admin</div>
+    <div class="row" style="flex:none">
+      <button class="ghost sm hide" id="walletBtn">Connect owner wallet</button>
+      <button class="ghost sm hide" id="logoutBtn">Log out</button>
+    </div>
+  </header>
+
+  <section class="card" id="login" style="max-width:380px">
+    <h2>Admin login</h2>
+    <label class="f">Password<input type="password" id="pw" autocomplete="current-password"></label>
+    <button id="loginBtn">Log in</button>
+    <div id="loginMsg" class="msg hide"></div>
+  </section>
+
+  <div id="panel" class="hide">
+    <div class="grid" id="stats"></div>
+    <div id="walletMsg" class="msg hide"></div>
+    <div id="actMsg" class="msg hide"></div>
+
+    <div class="tabs" id="tabs">
+      <button data-t="plans" class="on">Plans</button>
+      <button data-t="subs">Subscriptions</button>
+      <button data-t="users">Credit balances</button>
+      <button data-t="pays">Payment history</button>
+      <button data-t="settings">Settings</button>
+    </div>
+
+    <section class="card" data-p="plans">
+      <h2>Plans</h2>
+      <div class="scroll"><table><thead><tr><th>#</th><th>Name</th><th class="num">Price</th><th>Every</th><th class="num">Max charges</th><th class="num">Cap</th><th class="num">Credits / payment</th><th>Status</th><th></th></tr></thead><tbody id="planRows"></tbody></table></div>
+      <h2 style="margin-top:18px">New plan</h2>
+      <p class="muted small">Price, period and max charges are written to the contract and cannot be edited afterwards; to change terms, close the plan and create a new one. Existing subscribers always keep the terms they signed up with.</p>
+      <div class="grid">
+        <label class="f">Name<input id="npName" maxlength="60" placeholder="Starter"></label>
+        <label class="f">Price (USDT)<input id="npPrice" inputmode="decimal" placeholder="10"></label>
+        <label class="f">Period (days)<input id="npDays" inputmode="decimal" placeholder="30"></label>
+        <label class="f">Max charges (cap)<input id="npMax" inputmode="numeric" placeholder="12"></label>
+        <label class="f">Credits per payment<input id="npCredits" inputmode="numeric" placeholder="1000"></label>
+      </div>
+      <button id="npBtn" style="max-width:260px">Create plan on chain</button>
+    </section>
+
+    <section class="card hide" data-p="subs">
+      <h2>Subscriptions</h2>
+      <p class="muted small">"Charge" works only when a renewal is due and the cap is not used up; the contract rejects anything else. "Cancel" ends the subscription for the user.</p>
+      <div class="scroll"><table><thead><tr><th>Wallet</th><th>Plan</th><th class="num">Price</th><th class="num">Charges</th><th>Next charge</th><th>Status</th><th></th></tr></thead><tbody id="subRows"></tbody></table></div>
+    </section>
+
+    <section class="card hide" data-p="users">
+      <h2>Credit balances</h2>
+      <div class="scroll"><table><thead><tr><th>Wallet</th><th class="num">Credits</th><th>Since</th></tr></thead><tbody id="userRows"></tbody></table></div>
+      <h2 style="margin-top:18px">Adjust credits</h2>
+      <div class="grid">
+        <label class="f">Wallet address<input id="adjAddr" placeholder="0x…"></label>
+        <label class="f">Change (+/-)<input id="adjDelta" inputmode="numeric" placeholder="-100"></label>
+        <label class="f">Reason<input id="adjReason" maxlength="120" placeholder="refund, usage, bonus…"></label>
+      </div>
+      <button id="adjBtn" style="max-width:260px">Apply</button>
+      <h2 style="margin-top:18px">Credit ledger</h2>
+      <div class="scroll"><table><thead><tr><th>Date</th><th>Wallet</th><th class="num">Change</th><th>Reason</th></tr></thead><tbody id="ledgerRows"></tbody></table></div>
+    </section>
+
+    <section class="card hide" data-p="pays">
+      <h2>Payment history</h2>
+      <div class="scroll"><table><thead><tr><th>Date</th><th>Wallet</th><th>Plan</th><th>Type</th><th class="num">USDT</th><th class="num">Credits</th><th class="num">Block</th><th>Tx</th></tr></thead><tbody id="payRows"></tbody></table></div>
+      <h2 style="margin-top:18px">Verify a transaction manually</h2>
+      <div class="row"><input id="vTx" placeholder="0x… transaction hash"><button id="vBtn" style="max-width:160px">Verify</button></div>
+    </section>
+
+    <section class="card hide" data-p="settings">
+      <h2>Settings</h2>
+      <label class="f" style="max-width:320px">Minimum wallet balance to subscribe (USDT)<input id="minBal" inputmode="decimal"></label>
+      <p class="muted small">Shown to users as the eligibility rule. A plan's own price is always required as well.</p>
+      <button id="minBtn" style="max-width:260px">Save</button>
+      <dl class="kv" style="margin-top:18px;max-width:640px">
+        <dt>Contract</dt><dd class="mono" id="iContract"></dd>
+        <dt>Owner</dt><dd class="mono" id="iOwner"></dd>
+        <dt>Treasury</dt><dd class="mono" id="iTreasury"></dd>
+        <dt>USDT</dt><dd class="mono" id="iUsdt"></dd>
+        <dt>Shortest plan period</dt><dd id="iMinPeriod"></dd>
+      </dl>
+    </section>
+  </div>
+</div>
+<script src="/vendor/ethers.umd.min.js"></script>
+<script src="/admin.js"></script>
+</body>
+</html>

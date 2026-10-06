@@ -1,0 +1,23 @@
+{
+  "name": "usdt-credits",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI credits sold by capped USDT subscription on BNB Smart Chain",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "compile": "node scripts/compile.js",
+    "deploy": "node scripts/deploy.js",
+    "start": "node server/index.js",
+    "chain": "hardhat node",
+    "test": "node test/e2e.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.17",
+    "solc": "0.8.26"
+  }
+}
