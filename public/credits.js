@@ -88,6 +88,8 @@
     $("connectBtn").onclick = () => connect(true);
     $("stopBtn").onclick = () => act($("stopBtn"), "Stop billing", "Stopping…", () => A.bill.stop(), "Billing stopped. No more charges can be made.");
     $("resumeBtn").onclick = () => act($("resumeBtn"), "Resume billing", "Resuming…", () => A.bill.resume(), "Billing resumed.");
-    await connect(false); // silent: shows the account if the wallet is already connected
+    // In a wallet browser the wallet answers the address request itself at load, so ask there;
+    // on a desktop extension only use what is already shared (no popup on load).
+    await connect(A.inWalletBrowser());
   })().catch((e) => A.note("pageNote", "Could not load the page: " + A.errText(e), "bad"));
 })();
