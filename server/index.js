@@ -306,7 +306,8 @@ const safeEq = (a, b) => {
   return crypto.timingSafeEqual(x, y);
 };
 app.post("/api/admin/login", limit("login", 8, 15 * 60e3), (req, res) => {
-  if (!safeEq(req.body?.password ?? "", ADMIN_PASSWORD)) return res.status(401).json({ error: "Wrong password" });
+  // spaces/newlines around the password (pasting on a phone adds them) are ignored
+  if (!safeEq(String(req.body?.password ?? "").trim(), ADMIN_PASSWORD.trim())) return res.status(401).json({ error: "Wrong password" });
   const exp = String(Date.now() + 8 * 3600e3);
   res.json({ token: `${exp}.${sign(exp)}` });
 });

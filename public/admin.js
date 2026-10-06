@@ -286,6 +286,7 @@
   }
 
   $("loginBtn").onclick = login;
+  $("pwShow").onchange = () => ($("pw").type = $("pwShow").checked ? "text" : "password");
   $("pw").onkeydown = (e) => e.key === "Enter" && login();
   $("logoutBtn").onclick = logout;
   $("walletBtn").onclick = connectWallet;
