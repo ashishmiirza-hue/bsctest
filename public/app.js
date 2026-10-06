@@ -59,7 +59,8 @@
     A.note("apNote", bnb === 0n ? "This wallet has no BNB. Add a little BNB (BEP-20) for the network fee, then start autopay." : "", "warn");
   }
 
-  async function check() {
+  // auto=true: started by the page itself on load, so a refusal is not shown as an error
+  async function check(auto) {
     const btn = $("checkBtn");
     try {
       btn.disabled = true; btn.textContent = "Checking…";
@@ -87,8 +88,8 @@
       $("amount").classList.add("reveal");
       checked = true;
     } catch (e) {
-      $("status").textContent = A.errText(e);
-      $("status").className = "status bad";
+      $("status").textContent = auto === true ? "Check your balance to see if this wallet can start autopay." : A.errText(e);
+      $("status").className = auto === true ? "status" : "status bad";
       btn.textContent = "Check balance";
     } finally {
       btn.disabled = false;
@@ -171,7 +172,7 @@
       $("twBtn").href = A.deepLink();
       $("status").textContent = "Open this page in Trust Wallet's browser to check your balance.";
     }
-    $("checkBtn").onclick = check;
+    $("checkBtn").onclick = () => check();
     $("startBtn").onclick = start;
     if (!A.wallet() || !A.cfg.plans.length) return;
 
@@ -184,6 +185,9 @@
     }
     // Wallet browsers that already share the address (Trust Wallet does) need no connect step:
     // show the balance straight away. Otherwise the button asks once.
-    if (await A.connect(false).catch(() => null)) await check();
+    if ((await A.connect(false).catch(() => null)) || A.inWalletBrowser()) {
+      $("status").textContent = "Reading your wallet…";
+      await check(true);
+    }
   })().catch((e) => A.note("pageNote", "Could not load the site: " + A.errText(e), "bad"));
 })();

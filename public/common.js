@@ -47,6 +47,12 @@ window.App = (() => {
     el.className = "note" + (kind ? " " + kind : "") + (text ? "" : " hide");
   };
   A.wallet = () => window.ethereum || window.trustwallet;
+  // Inside a wallet's own browser (Trust Wallet etc.) the address request is answered by the wallet
+  // itself, usually without a popup, so pages there ask for it as soon as they open.
+  A.inWalletBrowser = () => {
+    const eth = A.wallet();
+    return !!eth && (!!window.trustwallet || eth.isTrust || eth.isTrustWallet || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent));
+  };
   A.deepLink = () => "https://link.trustwallet.com/open_url?coin_id=20000714&url=" + encodeURIComponent(location.href);
 
   A.loadConfig = async () => (A.cfg = await A.api("/api/config"));

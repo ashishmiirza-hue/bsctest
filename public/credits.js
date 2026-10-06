@@ -98,5 +98,6 @@
     $("stopBtn").onclick = () => act($("stopBtn"), "Stop autopay", "Stopping…", () => A.sub.cancel(), "Autopay stopped. No more payments will be taken.");
     $("revokeBtn").onclick = () => act($("revokeBtn"), "Remove approval", "Removing…", () => A.usdt.approve(A.cfg.contract, 0n), "Approval removed. This site can no longer take USDT from your wallet.");
     await connect(false); // no popup if the wallet is already connected
+    if (!A.me && A.inWalletBrowser()) await connect(true); // wallet browsers answer this themselves
   })().catch((e) => A.note("pageNote", "Could not load the page: " + A.errText(e), "bad"));
 })();
