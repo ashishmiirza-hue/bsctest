@@ -50,6 +50,11 @@
 
   async function init() {
     cfg = await api("/api/config");
+    if (cfg.setup) {
+      $("connectBtn").disabled = true;
+      msg("msg1", "This site is still being set up. Please check back soon.", "warn");
+      return;
+    }
     $("cAddr").textContent = cfg.contract;
     eth = window.ethereum || window.trustwallet;
     if (!eth) {

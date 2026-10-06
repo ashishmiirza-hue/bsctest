@@ -24,7 +24,25 @@
     <div id="loginMsg" class="msg hide"></div>
   </section>
 
+  <section class="card hide" id="setup" style="max-width:620px">
+    <h2>Setup: deploy the subscription contract</h2>
+    <p class="muted small">This is done once. Your wallet sends the deployment transaction, so no private key is stored anywhere. The wallet you connect becomes the contract owner: only it can create plans, charge renewals and cancel subscriptions. You need a little BNB for the network fee.</p>
+    <dl class="kv" style="margin-bottom:12px">
+      <dt>Network</dt><dd id="suChain"></dd>
+      <dt>USDT token</dt><dd class="mono" id="suUsdt"></dd>
+      <dt>Owner wallet</dt><dd class="mono" id="suOwner">not connected</dd>
+    </dl>
+    <label class="f">Treasury address (where USDT payments are sent)<input id="suTreasury" placeholder="0x… (connect wallet to use its address)"></label>
+    <label class="f" style="max-width:260px">Shortest allowed plan period (days)<input id="suDays" inputmode="decimal" value="1"></label>
+    <div class="row">
+      <button class="ghost" id="suConnect">1. Connect owner wallet</button>
+      <button id="suDeploy" disabled>2. Deploy contract</button>
+    </div>
+    <div id="suMsg" class="msg hide"></div>
+  </section>
+
   <div id="panel" class="hide">
+    <div id="envNote" class="msg warn hide"></div>
     <div class="grid" id="stats"></div>
     <div id="walletMsg" class="msg hide"></div>
     <div id="actMsg" class="msg hide"></div>

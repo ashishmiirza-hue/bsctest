@@ -59,6 +59,7 @@
     token = "";
     sessionStorage.removeItem("adminToken");
     $("panel").classList.add("hide");
+    $("setup").classList.add("hide");
     $("login").classList.remove("hide");
     $("walletBtn").classList.add("hide");
     $("logoutBtn").classList.add("hide");
@@ -80,9 +81,16 @@
   async function load() {
     data = await api("/api/admin/overview");
     $("login").classList.add("hide");
-    $("panel").classList.remove("hide");
-    $("walletBtn").classList.remove("hide");
     $("logoutBtn").classList.remove("hide");
+    $("setup").classList.toggle("hide", !data.setupNeeded);
+    $("panel").classList.toggle("hide", !!data.setupNeeded);
+    $("walletBtn").classList.toggle("hide", !!data.setupNeeded);
+    if (data.setupNeeded) {
+      $("suChain").textContent = data.chainId === 56 ? "BNB Smart Chain (mainnet)" : data.chainId === 97 ? "BSC testnet" : "chain " + data.chainId;
+      $("suUsdt").textContent = data.usdt;
+      return;
+    }
+    msg("envNote", data.contractInEnv ? "" : "Contract " + data.contract + " is saved in the database only. Add CONTRACT_ADDRESS=" + data.contract + " to your hosting environment variables so it survives a restart.", "warn");
     render();
   }
 
@@ -135,6 +143,56 @@
     $("iTreasury").textContent = data.treasury;
     $("iUsdt").textContent = data.usdt;
     $("iMinPeriod").textContent = every(data.minPeriod);
+  }
+
+  // ---- first-time setup: deploy the contract from the admin's wallet
+  let setupSigner;
+  async function setupConnect() {
+    try {
+      msg("suMsg");
+      const eth = window.ethereum || window.trustwallet;
+      if (!eth) throw new Error("No wallet found. Open this page in Trust Wallet's DApp browser or a browser with a wallet extension.");
+      const [acc] = await eth.request({ method: "eth_requestAccounts" });
+      const hex = "0x" + data.chainId.toString(16);
+      if ((await eth.request({ method: "eth_chainId" })) !== hex) await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
+      const provider = new ethers.BrowserProvider(eth);
+      if (Number((await provider.getNetwork()).chainId) !== data.chainId) throw new Error("Switch the wallet to the right network first.");
+      setupSigner = await provider.getSigner(acc);
+      const me = await setupSigner.getAddress();
+      $("suOwner").textContent = me;
+      if (!$("suTreasury").value.trim()) $("suTreasury").value = me;
+      $("suDeploy").disabled = false;
+    } catch (e) {
+      msg("suMsg", errText(e), "bad");
+    }
+  }
+
+  async function setupDeploy() {
+    const b = $("suDeploy");
+    try {
+      const treasury = $("suTreasury").value.trim();
+      const minPeriod = Math.round(Number($("suDays").value) * 86400);
+      if (!ethers.isAddress(treasury)) throw new Error("Treasury must be a wallet address (0x…).");
+      if (!(minPeriod >= 60)) throw new Error("Shortest plan period must be a positive number of days.");
+      b.disabled = true;
+      msg("suMsg", "Confirm the deployment in your wallet…");
+      const art = await api("/api/admin/artifact");
+      const c = await new ethers.ContractFactory(art.abi, art.bytecode, setupSigner).deploy(data.usdt, treasury, minPeriod);
+      msg("suMsg", "Deploying… waiting for confirmation. Do not close this page.");
+      await c.waitForDeployment();
+      const address = await c.getAddress();
+      for (let i = 0; ; i++) { // the server's RPC may see the new contract a moment later
+        try { await api("/api/admin/contract", "POST", { address }); break; } catch (e) {
+          if (i >= 10) throw new Error("Contract deployed at " + address + " but the server could not save it: " + errText(e) + " Set CONTRACT_ADDRESS=" + address + " in your hosting environment.");
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+      await load();
+      msg("actMsg", "Contract deployed: " + address, "ok");
+    } catch (e) {
+      msg("suMsg", errText(e), "bad");
+      b.disabled = !setupSigner;
+    }
   }
 
   async function connectWallet() {
@@ -231,6 +289,8 @@
   $("pw").onkeydown = (e) => e.key === "Enter" && login();
   $("logoutBtn").onclick = logout;
   $("walletBtn").onclick = connectWallet;
+  $("suConnect").onclick = setupConnect;
+  $("suDeploy").onclick = setupDeploy;
   $("npBtn").onclick = () => createPlan($("npBtn"));
   $("minBtn").onclick = async () => {
     try { await api("/api/admin/settings", "PUT", { minBalance: $("minBal").value }); await load(); msg("actMsg", "Minimum balance saved.", "ok"); } catch (e) { msg("actMsg", errText(e), "bad"); }

@@ -63,12 +63,15 @@ Production notes:
 
 ## Render par deploy
 
-Contract Render par nahi jata; wo apne PC se `npm run deploy` se deploy hota hai. Render par sirf website + backend chalta hai.
+Contract admin panel se deploy hota hai (PC par kuch chalane ki zaroorat nahi):
+`CONTRACT_ADDRESS` khaali chhodo → site setup mode me start hogi → `/admin.html` kholo (Trust Wallet DApp browser me) → login →
+owner wallet connect → Deploy contract → jo address dikhe use Render env me `CONTRACT_ADDRESS` me daal do.
+Private key kahin store nahi hoti; jo wallet deploy karta hai wahi owner banta hai. (`npm run deploy` wala tareeka bhi chalta hai.)
 
 1. Code ko ek **private** GitHub repo me push karo (`.env` push nahi hota, `.gitignore` me hai).
 2. Render → New → Web Service → repo select karo.
    - Runtime: Node · Build Command: `npm install` · Start Command: `npm start`
-3. Environment variables: `RPC_URL`, `CHAIN_ID`, `USDT_ADDRESS`, `CONTRACT_ADDRESS`, `CONFIRMATIONS`, `ADMIN_PASSWORD`, `SESSION_SECRET`, `NODE_VERSION=22`.
+3. Environment variables: `RPC_URL`, `CHAIN_ID`, `USDT_ADDRESS`, `CONTRACT_ADDRESS` (admin panel se deploy ke baad), `CONFIRMATIONS`, `ADMIN_PASSWORD`, `SESSION_SECRET`, `NODE_VERSION=22`.
    `PORT` Render khud deta hai. `DEPLOYER_KEY` Render par kabhi mat daalo.
 4. Database: paid instance par Disk add karo (mount path `/var/data`) aur `DB_PATH=/var/data/app.db` set karo.
    Free plan par disk nahi hoti, to har restart par credits aur payment history ud jayegi.

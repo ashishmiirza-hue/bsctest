@@ -22,7 +22,9 @@ const PORT = Number(env("PORT", 3000));
 const RPC_URL = need("RPC_URL");
 const CHAIN_ID = Number(need("CHAIN_ID"));
 const USDT = ethers.getAddress(need("USDT_ADDRESS"));
-const CONTRACT = ethers.getAddress(need("CONTRACT_ADDRESS"));
+// Optional: without it the server starts in setup mode and the contract is deployed from the admin panel.
+const ENV_CONTRACT = process.env.CONTRACT_ADDRESS ? ethers.getAddress(process.env.CONTRACT_ADDRESS) : null;
+let CONTRACT = null;
 const CONFIRMATIONS = Number(env("CONFIRMATIONS", 5));
 const ADMIN_PASSWORD = need("ADMIN_PASSWORD");
 const SESSION_SECRET = need("SESSION_SECRET");
@@ -32,6 +34,7 @@ if (ADMIN_PASSWORD.length < 10) console.warn("WARNING: ADMIN_PASSWORD is short; 
 // ------------------------------------------------------------------ chain
 const SUB_ABI = [
   "function owner() view returns (address)",
+  "function token() view returns (address)",
   "function treasury() view returns (address)",
   "function minPeriod() view returns (uint32)",
   "function planCount() view returns (uint256)",
@@ -50,7 +53,8 @@ const ERC20_ABI = [
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 ];
 const provider = new ethers.JsonRpcProvider(RPC_URL, CHAIN_ID, { staticNetwork: true });
-const sub = new ethers.Contract(CONTRACT, SUB_ABI, provider);
+let sub = null; // set by useContract()
+const subIface = new ethers.Interface(SUB_ABI);
 const usdt = new ethers.Contract(USDT, ERC20_ABI, provider);
 const erc20Iface = new ethers.Interface(ERC20_ABI);
 let DECIMALS = 18;
@@ -90,6 +94,19 @@ function addCredits(address, delta, reason, ref) {
 }
 
 // ------------------------------------------------------------------ chain helpers
+// Point the server at a subscription contract after checking it really is one for our token.
+async function useContract(address) {
+  const a = ethers.getAddress(address);
+  if ((await provider.getCode(a)) === "0x") throw new Error("No contract at " + a);
+  const c = new ethers.Contract(a, SUB_ABI, provider);
+  let token;
+  try { token = await c.token(); await c.planCount(); } catch { throw new Error("That address is not a CreditSubscriptions contract"); }
+  if (ethers.getAddress(token) !== USDT) throw new Error("That contract uses a different token than USDT_ADDRESS");
+  CONTRACT = a;
+  sub = c;
+  planCache = { at: 0, list: [] };
+}
+
 let planCache = { at: 0, list: [] };
 async function chainPlans(force) {
   if (!force && Date.now() - planCache.at < 15000) return planCache.list;
@@ -157,7 +174,7 @@ async function processTx(txHash) {
 
   for (const log of ours) {
     let ev;
-    try { ev = sub.interface.parseLog(log); } catch { continue; }
+    try { ev = subIface.parseLog(log); } catch { continue; }
     if (!ev) continue;
     if (ev.name === "PlanCreated" || ev.name === "PlanStatus") { planCache.at = 0; continue; }
     if (!ev.args.user) continue;
@@ -228,7 +245,14 @@ const limit = (name, max, windowMs) => (req, res, next) => {
 };
 setInterval(() => { const t = Date.now(); for (const [k, h] of hits) if (t - h.start > 3600e3) hits.delete(k); }, 600e3).unref();
 
+// Until a contract is configured, only login and the setup endpoints work.
+app.use("/api", (req, res, next) => {
+  if (sub || ["/config", "/admin/login", "/admin/overview", "/admin/artifact", "/admin/contract"].includes(req.path)) return next();
+  res.status(503).json({ error: "Setup is not finished yet." });
+});
+
 app.get("/api/config", wrap(async (req, res) => {
+  if (!sub) return res.json({ setup: true, chainId: CHAIN_ID, plans: [] });
   const [treasury, plans] = await Promise.all([sub.treasury(), mergedPlans()]);
   res.json({
     chainId: CHAIN_ID,
@@ -293,10 +317,11 @@ const admin = (req, res, next) => {
 };
 
 app.get("/api/admin/overview", admin, wrap(async (req, res) => {
+  if (!sub) return res.json({ setupNeeded: true, chainId: CHAIN_ID, usdt: USDT, decimals: DECIMALS });
   const [owner, treasury, minPeriod, plans] = await Promise.all([sub.owner(), sub.treasury(), sub.minPeriod(), mergedPlans(true)]);
   const total = db.prepare("SELECT amount FROM payments").all().reduce((s, r) => s + BigInt(r.amount), 0n);
   res.json({
-    chainId: CHAIN_ID, contract: CONTRACT, usdt: USDT, decimals: DECIMALS, owner, treasury,
+    chainId: CHAIN_ID, contract: CONTRACT, contractInEnv: !!ENV_CONTRACT, usdt: USDT, decimals: DECIMALS, owner, treasury,
     minPeriod: Number(minPeriod), minBalance: setting("min_balance"), now: now(),
     explorer: env("EXPLORER_URL", CHAIN_ID === 56 ? "https://bscscan.com" : ""),
     plans,
@@ -306,6 +331,20 @@ app.get("/api/admin/overview", admin, wrap(async (req, res) => {
     payments: db.prepare("SELECT * FROM payments ORDER BY id DESC LIMIT 500").all(),
     ledger: db.prepare("SELECT * FROM credit_ledger ORDER BY id DESC LIMIT 200").all(),
   });
+}));
+
+// Setup: ABI + bytecode for deploying from the admin's own wallet (no key ever reaches the server).
+app.get("/api/admin/artifact", admin, (req, res) => res.json(require("../artifacts/CreditSubscriptions.json")));
+
+// Setup: remember the contract the admin just deployed. Ignored once CONTRACT_ADDRESS is set in the environment.
+app.post("/api/admin/contract", admin, wrap(async (req, res) => {
+  if (ENV_CONTRACT) return res.status(409).json({ error: "CONTRACT_ADDRESS is set in the environment; change it there." });
+  if (sub && db.prepare("SELECT 1 FROM payments LIMIT 1").get()) return res.status(409).json({ error: "This site already has payments on its current contract." });
+  const a = addr(req.body?.address);
+  if (!a) return res.status(400).json({ error: "Bad address" });
+  try { await useContract(a); } catch (e) { return res.status(400).json({ error: e.message }); }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('contract', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(a);
+  res.json({ ok: true, contract: a });
 }));
 
 app.put("/api/admin/settings", admin, wrap(async (req, res) => {
@@ -352,9 +391,10 @@ app.use("/api", (req, res) => res.status(404).json({ error: "Not found" }));
 (async () => {
   const net = await new ethers.JsonRpcProvider(RPC_URL).getNetwork();
   if (Number(net.chainId) !== CHAIN_ID) throw new Error(`RPC is chain ${net.chainId}, .env says ${CHAIN_ID}`);
-  if ((await provider.getCode(CONTRACT)) === "0x") throw new Error("No contract at CONTRACT_ADDRESS");
   DECIMALS = Number(await usdt.decimals());
-  app.listen(PORT, () => console.log(`listening on :${PORT} chain ${CHAIN_ID} contract ${CONTRACT}`));
+  const saved = ENV_CONTRACT || setting("contract");
+  if (saved) await useContract(saved);
+  app.listen(PORT, () => console.log(`listening on :${PORT} chain ${CHAIN_ID} ` + (CONTRACT ? `contract ${CONTRACT}` : "SETUP MODE: deploy the contract from /admin.html")));
 })().catch((e) => {
   console.error("Startup failed:", e.message);
   process.exit(1);
